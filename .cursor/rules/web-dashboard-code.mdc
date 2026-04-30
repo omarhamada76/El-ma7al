@@ -1,0 +1,26 @@
+---
+description: Conventions for this repo—scope, layout, and quality bar
+globs: **/*.{ts,tsx,js,jsx}
+alwaysApply: false
+---
+
+# web-dashboard code
+
+## Scope of edits
+
+- Change only what the request needs. No drive-by refactors, comment stripping, or unrelated formatting.
+- Match existing naming, imports, component patterns, and type style in the touched files.
+
+## Where things live
+
+- **UI**: `src/pages/`, `src/components/`, `src/layouts/` — React 18, React Router, TanStack Query, Zustand where already used.
+- **HTTP/API client**: `src/api/` — extend existing modules instead of ad-hoc `fetch` in components when an API module exists.
+- **Shared types**: `src/types/api.ts` (and nearby) — align new shapes with existing types.
+- **Node server**: `server/` (entry `server/index.js`) — keep DB and route patterns consistent with `server/db.js` / `server/pgdb.js`.
+- **SQL migrations**: `server/migrations/`.
+- **Supabase**: `supabase/functions/`, client helpers under `src/lib/supabase.ts` when integrating.
+
+## Quality
+
+- After substantive edits, run `npm run lint` or check linter diagnostics for touched files when feasible.
+- Prefer reusing utilities under `src/lib/` over duplicating logic.

@@ -1,10 +1,15 @@
 import { useState, useCallback } from 'react'
+import { cn } from '@/lib/utils'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
 import { useBarcodeScanner } from '@/hooks/useBarcodeScanner'
 import { useInvoiceStore } from '@/stores/invoiceStore'
-import { extractProductBarcodeForLookup } from '@/lib/barcodeLookup'
+import {
+  extractProductBarcodeForLookup,
+  normalizeInvoiceScanToken,
+  setInvoiceNewPendingBarcode,
+} from '@/lib/barcodeLookup'
 
 export default function DashboardLayout() {
   const navigate = useNavigate()
@@ -21,9 +26,10 @@ export default function DashboardLayout() {
   useBarcodeScanner({
     onScan: (barcode) => {
       void (async () => {
-        const logical = extractProductBarcodeForLookup(barcode)
+        const logical = normalizeInvoiceScanToken(extractProductBarcodeForLookup(barcode))
         if (/^B\d+$/i.test(logical) || /^G\d+$/i.test(logical)) {
           showToast('Batch/bag label detected — opening full invoice screen', 'info', 3200)
+          setInvoiceNewPendingBarcode(logical)
           navigate(`/invoices/new?barcode=${encodeURIComponent(logical)}`)
           return
         }
@@ -32,6 +38,7 @@ export default function DashboardLayout() {
         if (location.pathname === '/invoices/new') {
           const params = new URLSearchParams(location.search)
           params.set('barcode', logical)
+          setInvoiceNewPendingBarcode(logical)
           navigate({ pathname: '/invoices/new', search: params.toString() }, { replace: true })
           return
         }
@@ -51,31 +58,38 @@ export default function DashboardLayout() {
 
   return (
     <div className="h-dvh max-h-dvh min-h-0 overflow-hidden flex flex-col bg-gray-50 dark:bg-gray-900 md:flex-row">
-      {/* Mobile sidebar backdrop */}
+      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      {/* Mobile sidebar backdrop with blur */}
       {sidebarOpen && (
         <button
           type="button"
           aria-label="إغلاق القائمة"
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-all md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Header onMenuClick={() => setSidebarOpen((o) => !o)} />
-        <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 md:p-6">
-          <Outlet />
+        {/* No top padding on <main>: padding on a scrollport leaves a fixed gap above `position:sticky` headers. */}
+        <main className="min-h-0 flex-1 overflow-auto px-3 pb-3 sm:px-4 sm:pb-4 md:px-6 md:pb-6">
+          <div className="pt-3 sm:pt-4 md:pt-6 min-h-0">
+            <Outlet />
+          </div>
         </main>
         {toast && (
           <div
-            className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-lg w-[min(100vw-2rem,42rem)] rounded-lg px-4 py-3 text-sm shadow-lg break-words ${
+            className={cn(
+              "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] max-w-sm w-[calc(100vw-2.5rem)]",
+              "rounded-xl px-4 py-3 text-sm shadow-2xl ring-1 ring-black/5 animate-in fade-in slide-in-from-bottom-4 duration-300",
               toast.tone === 'info'
-                ? 'bg-amber-600 text-white'
-                : 'bg-red-600 text-white'
-            }`}
+                ? 'bg-amber-600 text-white dark:bg-amber-500'
+                : 'bg-red-600 text-white dark:bg-red-500'
+            )}
             role="status"
           >
-            {toast.message}
+            <div className="flex items-center gap-2">
+              <span className="flex-1 font-medium">{toast.message}</span>
+            </div>
           </div>
         )}
       </div>

@@ -1,10 +1,34 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { AccountStatement, AccountStatementRow } from '@/types/api'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import {
+  formatCurrency,
+  formatNumber,
+  formatStatementDate,
+  formatStatementPaymentMethod,
+  formatStatementRunningBalanceText,
+  statementLineTotal,
+  statementLineUnitPrice,
+} from '@/lib/utils'
 import { normalizeWhatsAppPhone } from '@/lib/invoicePdf'
 
 const SHOP_NAME = 'الصيدلية البيطرية'
+
+/**
+ * Badges for html2canvas: flex centers Arabic label in the box (inline-block + line-height
+ * often looks bottom-heavy / off-center in PDF capture).
+ */
+const BADGE_BASE =
+  'display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;height:24px;padding:0 10px;font-size:10px;line-height:1;border-radius:4px;vertical-align:middle;white-space:nowrap;'
+const BADGE_INV = `${BADGE_BASE}background:#f59e0b;color:#fff;`
+const BADGE_PAY = `${BADGE_BASE}background:#16a34a;color:#fff;`
+const BADGE_DEF = `${BADGE_BASE}background:#64748b;color:#fff;`
+
+function formatPeriodLabel(from: string, to: string): string {
+  const f = /^\d{4}-\d{2}-\d{2}/.test(String(from)) ? formatStatementDate(from) : from
+  const t = /^\d{4}-\d{2}-\d{2}/.test(String(to)) ? formatStatementDate(to) : to
+  return `${f} — ${t}`
+}
 
 function escapeHtml(s: string): string {
   return s
@@ -14,64 +38,161 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function pdfMoney(n: number | undefined) {
-  const v = Number(n) || 0
-  return v > 0 ? formatCurrency(v) : '—'
+function pdfCellQty(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  return formatNumber(n, 3)
 }
 
-function rowHtml(row: AccountStatementRow): string {
-  const itemsList =
-    row.type === 'invoice' && row.items?.length
-      ? `<div style="margin-top:2px;font-size:10px;color:#666;">${row.items.map((it) => `${escapeHtml(it.product_name)} ×${it.quantity}`).join('، ')}</div>`
-      : ''
-  const barnCell = row.barn_name
-    ? `<span style="font-weight:600;">${escapeHtml(row.barn_name)}</span>`
-    : '—'
-  const dd = row.display_debit ?? row.debit
-  const dc = row.display_credit ?? row.credit
+function pdfCellUnitPrice(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return '—'
+  return formatCurrency(n)
+}
 
-  return `<tr>
-    <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${formatDate(row.date)}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${row.type === 'invoice' ? 'فاتورة' : 'دفعة'}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;white-space:nowrap;">${barnCell}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${escapeHtml(row.description)}${itemsList}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${pdfMoney(dd)}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${pdfMoney(dc)}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${row.type === 'invoice' ? formatCurrency(row.invoice_total ?? row.debit) : '—'}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${row.type === 'invoice' ? formatCurrency(row.paid ?? 0) : '—'}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;">${row.type === 'invoice' ? formatCurrency(row.remaining ?? 0) : '—'}</td>
-    <td style="padding:6px 8px;border:1px solid #ddd;font-weight:600;">${formatCurrency(row.balance)}</td>
+function pdfCellLineTotal(item: { quantity: number; total_price?: number }): string {
+  const t = statementLineTotal(item)
+  if (t == null || !Number.isFinite(t)) return '—'
+  return formatCurrency(t)
+}
+
+function typeBadgeHtml(row: AccountStatementRow): string {
+  if (row.type === 'invoice') {
+    return `<span style="${BADGE_INV}">فاتورة</span>`
+  }
+  const def =
+    row.payment_method === 'deferred' ||
+    row.payment_method === 'آجل' ||
+    row.payment_method === 'credit'
+  if (def) {
+    return `<span style="${BADGE_DEF}">آجل</span>`
+  }
+  return `<span style="${BADGE_PAY}">سداد</span>`
+}
+
+function tdBase(extra = ''): string {
+  return `padding:6px 8px;border:1px solid #ddd;${extra}`
+}
+
+/** Thicker top border between movements (invoice / payment rows), not between line items. */
+function movementRowTopBorder(rowIndex: number): string {
+  return rowIndex > 0 ? 'border-top:2px solid #9ca3af;' : ''
+}
+
+/** One or more `<tr>` elements for a single statement row. */
+function statementRowsHtml(row: AccountStatementRow, rowIndex: number): string {
+  const isInv = row.type === 'invoice'
+  const amtColor = row.direction === 'debit' ? '#b91c1c' : '#047857'
+  const rbColor = Number(row.running_balance) < 0 ? '#dc2626' : '#047857'
+  const rowBg = isInv ? 'rgba(239,68,68,0.05)' : 'rgba(34,197,94,0.05)'
+  const trOpen = `<tr style="background:${rowBg};">`
+  const topMov = movementRowTopBorder(rowIndex)
+  const typeBadge = typeBadgeHtml(row)
+
+  if (isInv && row.items && row.items.length > 0) {
+    const n = row.items.length
+    const betweenItems = (k: number) =>
+      k < n - 1 ? 'padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #d1d5db;' : ''
+
+    const descStack = row.items
+      .map(
+        (it, k) =>
+          `<div style="color:#374151;font-size:12px;${betweenItems(k)}">${escapeHtml(String(it.product_name || '—'))}</div>`,
+      )
+      .join('')
+    const qtyStack = row.items
+      .map((it, k) => `<div style="${betweenItems(k)}">${pdfCellQty(it.quantity)}</div>`)
+      .join('')
+    const unitStack = row.items
+      .map((it, k) => {
+        const unit = statementLineUnitPrice(it)
+        return `<div style="${betweenItems(k)}">${pdfCellUnitPrice(unit)}</div>`
+      })
+      .join('')
+    const totalStack = row.items
+      .map((it, k) => `<div style="color:${amtColor};font-weight:600;${betweenItems(k)}">${pdfCellLineTotal(it)}</div>`)
+      .join('')
+
+    return `${trOpen}
+    <td style="${tdBase(topMov)}white-space:nowrap;vertical-align:top;">${formatStatementDate(row.date)}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;">${typeBadge}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;">${descStack}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;">${qtyStack}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;">${unitStack}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;">${totalStack}</td>
+    <td style="${tdBase(topMov)}vertical-align:middle;text-align:center;color:${amtColor};font-weight:600;white-space:nowrap;">${formatCurrency(row.amount)}</td>
+    <td style="${tdBase(topMov)}vertical-align:top;color:${rbColor};font-weight:600;">${formatStatementRunningBalanceText(row.running_balance)}</td>
+  </tr>`
+  }
+
+  if (isInv) {
+    const desc =
+      row.description && String(row.description).trim()
+        ? `<div style="color:#374151;font-size:12px;">${escapeHtml(String(row.description).trim())}</div>`
+        : '<div style="color:#374151;font-size:12px;">—</div>'
+    return `${trOpen}
+    <td style="${tdBase(topMov)}white-space:nowrap;">${formatStatementDate(row.date)}</td>
+    <td style="${tdBase(topMov)}">${typeBadge}</td>
+    <td style="${tdBase(topMov)}">${desc}</td>
+    <td style="${tdBase(topMov)}">${pdfCellQty(row.quantity)}</td>
+    <td style="${tdBase(topMov)}">${pdfCellUnitPrice(row.unit_price)}</td>
+    <td style="${tdBase(topMov)}color:${amtColor};font-weight:600;">${formatCurrency(row.amount)}</td>
+    <td style="${tdBase(topMov)}color:${amtColor};font-weight:600;">${formatCurrency(row.amount)}</td>
+    <td style="${tdBase(topMov)}color:${rbColor};font-weight:600;">${formatStatementRunningBalanceText(row.running_balance)}</td>
+  </tr>`
+  }
+
+  const payLabel =
+    row.payment_method === 'deferred' || row.payment_method === 'آجل' || row.payment_method === 'credit'
+      ? 'آجل'
+      : 'سداد'
+  const paymentDesc = `<div style="line-height:1.35;">
+    <div style="font-size:12px;color:#111827;">${payLabel} ${formatCurrency(row.amount)}</div>
+    <div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(formatStatementPaymentMethod(row.payment_method))}</div>
+    ${row.payment_method === 'deferred' && row.settled_at ? '<div style="font-size:10px;color:#059669;margin-top:2px;">(مُسدَّد)</div>' : ''}
+  </div>`
+
+  return `${trOpen}
+    <td style="${tdBase(topMov)}white-space:nowrap;">${formatStatementDate(row.date)}</td>
+    <td style="${tdBase(topMov)}">${typeBadge}</td>
+    <td style="${tdBase(topMov)}">${paymentDesc}</td>
+    <td style="${tdBase(topMov)}">${pdfCellQty(row.quantity)}</td>
+    <td style="${tdBase(topMov)}">${pdfCellUnitPrice(row.unit_price)}</td>
+    <td style="${tdBase(topMov)}color:${amtColor};font-weight:600;">${formatCurrency(row.amount)}</td>
+    <td style="${tdBase(topMov)}color:#6b7280;">—</td>
+    <td style="${tdBase(topMov)}color:${rbColor};font-weight:600;">${formatStatementRunningBalanceText(row.running_balance)}</td>
   </tr>`
 }
 
 function buildStatementHtml(
-  clientName: string,
+  titleLine: string,
   from: string,
   to: string,
   statement: AccountStatement,
 ): string {
-  const rows = statement.rows.map(rowHtml).join('')
+  const rows = statement.rows.map((row, i) => statementRowsHtml(row, i)).join('')
   const extraNote = statement.cycle
-    ? '<p style="margin:8px 0 14px;font-size:12px;color:#444;line-height:1.55;text-align:center;max-width:720px;margin-left:auto;margin-right:auto;">الرصيد الافتتاحي يشمل المديونية المتراكمة (مدى الحياة) عند بدء الدورة. الجدول يعرض فقط الفواتير والدفعات المسجّلة ضمن هذه الدورة.</p>'
+    ? '<p style="margin:8px 0 14px;font-size:12px;color:#444;line-height:1.55;text-align:center;max-width:720px;margin-left:auto;margin-right:auto;">الحساب السابق يشمل المديونية المتراكمة (مدى الحياة) عند بدء الدورة. الجدول يعرض فقط الفواتير والسداد المسجّل ضمن هذه الدورة.</p>'
     : statement.after_cycle
       ? `<p style="margin:8px 0 14px;font-size:12px;color:#444;line-height:1.55;text-align:center;">حركات من بعد إغلاق الدورة حتى تاريخ نهاية التقرير.</p>`
       : ''
 
+  const heading =
+    /^كشف/.test(String(titleLine).trim()) ? titleLine.trim() : `كشف حساب العميل — ${titleLine.trim()}`
+
   return `
     <div style="text-align:center;font-size:18px;font-weight:700;margin-bottom:4px;">${escapeHtml(SHOP_NAME)}</div>
-    <div style="text-align:center;font-size:15px;font-weight:700;margin-bottom:8px;">كشف حساب العميل — ${escapeHtml(clientName)}</div>
+    <div style="text-align:center;font-size:15px;font-weight:700;margin-bottom:8px;">${escapeHtml(heading)}</div>
     ${extraNote}
     <table style="width:100%;border-collapse:collapse;margin-bottom:14px;font-size:13px;">
       <tr>
         <td style="padding:4px 0;color:#555;">الفترة</td>
-        <td style="padding:4px 0;font-weight:600;">${escapeHtml(from)} — ${escapeHtml(to)}</td>
+        <td style="padding:4px 0;font-weight:600;">${escapeHtml(formatPeriodLabel(from, to))}</td>
       </tr>
       <tr>
-        <td style="padding:4px 0;color:#555;">الرصيد الافتتاحي</td>
+        <td style="padding:4px 0;color:#555;">الحساب السابق</td>
         <td style="padding:4px 0;font-weight:700;">${formatCurrency(statement.opening_balance)}</td>
       </tr>
       <tr>
-        <td style="padding:4px 0;color:#555;">الرصيد الختامي</td>
+        <td style="padding:4px 0;color:#555;">الرصيد الحالي</td>
         <td style="padding:4px 0;font-weight:700;">${formatCurrency(statement.closing_balance)}</td>
       </tr>
     </table>
@@ -80,14 +201,12 @@ function buildStatementHtml(
         <tr style="background:#f3f4f6;">
           <th style="padding:6px 8px;border:1px solid #ddd;">التاريخ</th>
           <th style="padding:6px 8px;border:1px solid #ddd;">النوع</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">العنبر</th>
           <th style="padding:6px 8px;border:1px solid #ddd;">البيان</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">مدين</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">دائن</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">إجمالي الفاتورة</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">المدفوع</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">المتبقي</th>
-          <th style="padding:6px 8px;border:1px solid #ddd;">الرصيد</th>
+          <th style="padding:6px 8px;border:1px solid #ddd;">الكمية</th>
+          <th style="padding:6px 8px;border:1px solid #ddd;">سعر الوحدة</th>
+          <th style="padding:6px 8px;border:1px solid #ddd;">الإجمالي</th>
+          <th style="padding:6px 8px;border:1px solid #ddd;text-align:center;">إجمالي الفاتورة</th>
+          <th style="padding:6px 8px;border:1px solid #ddd;">الرصيد النهائي</th>
         </tr>
       </thead>
       <tbody>
@@ -95,6 +214,86 @@ function buildStatementHtml(
       </tbody>
     </table>
   `
+}
+
+const PDF_SLICE_EPS_MM = 0.35
+
+/** Map each table row bottom to canvas Y so PDF pages can split only between rows, not through them. */
+function collectRowBottomsCanvasPx(wrap: HTMLElement, canvasHeight: number): number[] {
+  const wrapRect = wrap.getBoundingClientRect()
+  const wrapH = wrap.offsetHeight
+  if (wrapH <= 0) return [canvasHeight]
+
+  const bottoms = new Set<number>()
+  for (const tr of wrap.querySelectorAll('tr')) {
+    const r = tr.getBoundingClientRect()
+    const bottomCssPx = r.bottom - wrapRect.top
+    const yCanvas = (bottomCssPx / wrapH) * canvasHeight
+    const clamped = Math.min(canvasHeight, Math.max(0, yCanvas))
+    bottoms.add(Math.round(clamped * 1000) / 1000)
+  }
+  bottoms.add(canvasHeight)
+  return [...bottoms].sort((a, b) => a - b)
+}
+
+function rowBottomsPxToMm(bottomsPx: number[], canvasHeight: number, imgHeightMm: number): number[] {
+  return bottomsPx.map((px) => (px / canvasHeight) * imgHeightMm)
+}
+
+/**
+ * Build vertical slice ranges in mm so each slice ends at a row boundary when possible,
+ * instead of fixed page height (which cuts html2canvas output mid-row).
+ */
+function computeStatementPdfSlicesMm(
+  imgHeightMm: number,
+  pageContentMm: number,
+  rowBottomsMm: number[],
+): Array<{ start: number; end: number }> {
+  const eps = PDF_SLICE_EPS_MM
+  const breaks = [...new Set(rowBottomsMm)]
+    .filter((x) => x > eps && x < imgHeightMm - eps)
+    .sort((a, b) => a - b)
+
+  const slices: Array<{ start: number; end: number }> = []
+  let y = 0
+
+  while (y < imgHeightMm - eps) {
+    const cap = y + pageContentMm
+    let end = y
+    for (const b of breaks) {
+      if (b <= cap + eps && b > y + eps) end = b
+    }
+    if (end > y + eps) {
+      slices.push({ start: y, end })
+      y = end
+      continue
+    }
+
+    const nextBreak = breaks.find((b) => b > y + eps) ?? imgHeightMm
+    if (nextBreak - y <= pageContentMm + eps) {
+      slices.push({ start: y, end: nextBreak })
+      y = nextBreak
+    } else {
+      const hardEnd = Math.min(cap, imgHeightMm)
+      slices.push({ start: y, end: hardEnd })
+      y = hardEnd
+    }
+  }
+
+  return slices
+}
+
+function canvasSliceToDataUrl(source: HTMLCanvasElement, y0Px: number, y1Px: number): string {
+  const y0 = Math.max(0, Math.round(y0Px))
+  const y1 = Math.min(source.height, Math.round(y1Px))
+  const h = Math.max(1, y1 - y0)
+  const out = document.createElement('canvas')
+  out.width = source.width
+  out.height = h
+  const ctx = out.getContext('2d')
+  if (!ctx) throw new Error('canvas 2d')
+  ctx.drawImage(source, 0, y0, source.width, h, 0, 0, source.width, h)
+  return out.toDataURL('image/png')
 }
 
 export async function createStatementPdfBlob(
@@ -131,24 +330,29 @@ export async function createStatementPdfBlob(
       backgroundColor: '#ffffff',
     })
 
-    const imgData = canvas.toDataURL('image/png')
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
+    const marginMm = 8
+    const usableHeightMm = Math.max(40, pageHeight - 2 * marginMm)
     const imgWidth = pageWidth
-    const imgHeight = (canvas.height * imgWidth) / canvas.width
+    const imgHeightMm = (canvas.height * imgWidth) / canvas.width
 
-    let heightLeft = imgHeight
-    let position = 0
-    let page = 0
-
-    while (heightLeft > 0) {
-      if (page > 0) pdf.addPage()
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
-      heightLeft -= pageHeight
-      position -= pageHeight
-      page++
+    const bottomsPx = collectRowBottomsCanvasPx(wrap, canvas.height)
+    const bottomsMm = rowBottomsPxToMm(bottomsPx, canvas.height, imgHeightMm)
+    let slices = computeStatementPdfSlicesMm(imgHeightMm, usableHeightMm, bottomsMm)
+    if (slices.length === 0 && imgHeightMm > PDF_SLICE_EPS_MM) {
+      slices = [{ start: 0, end: imgHeightMm }]
     }
+
+    slices.forEach((slice, i) => {
+      if (i > 0) pdf.addPage()
+      const y0Px = (slice.start / imgHeightMm) * canvas.height
+      const y1Px = (slice.end / imgHeightMm) * canvas.height
+      const sliceData = canvasSliceToDataUrl(canvas, y0Px, y1Px)
+      const sliceMm = slice.end - slice.start
+      pdf.addImage(sliceData, 'PNG', 0, marginMm, imgWidth, sliceMm)
+    })
 
     return pdf.output('blob')
   } finally {

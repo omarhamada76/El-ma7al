@@ -14,6 +14,16 @@ export const dbPath = join(dataDir, 'vet-pharmacy.sqlite')
 
 let db
 
+/** Max length for `products.image_url` (e.g. data URLs) — rejects oversized JSON bodies. */
+const MAX_PRODUCT_IMAGE_URL_LEN = 800_000
+function assertProductImageUrlField(v) {
+  if (v == null || v === '') return
+  if (typeof v !== 'string') throw new Error('صورة المنتج غير صالحة')
+  if (v.length > MAX_PRODUCT_IMAGE_URL_LEN) {
+    throw new Error('صورة المنتج كبيرة جداً — قلّل الحجم وحاول مجدداً')
+  }
+}
+
 function getDb() {
   if (db) return db
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
@@ -565,7 +575,7 @@ export function updateClient(id, data) {
 export function deleteClient(id) {
   const d = getDb()
   const clientId = id
-  // Delete client's سجل الفواتير (invoices + items) and سجل المدفوعات (payments), then barns, then client
+  // Delete client's سجل الفواتير (invoices + items) and سجل السداد (payments), then barns, then client
   const invoices = d.prepare('SELECT id FROM invoices WHERE client_id = ?').all(clientId)
   for (const inv of invoices) {
     d.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(inv.id)
@@ -1227,26 +1237,32 @@ export function createProduct(data) {
   const run = d.transaction(() => {
     const t = now()
     const barcode = data.barcode ?? `PRD-${Date.now()}`
+    const imageUrl =
+      data.image_url != null && String(data.image_url).trim() !== '' ? String(data.image_url) : null
+    if (imageUrl) assertProductImageUrlField(imageUrl)
+    const unitTypeIns = data.unit_type ?? 'piece'
+    const defaultAlertLevel = unitTypeIns === 'bulk' ? 0 : 5
     d.prepare(`
     INSERT INTO products (name, company, category, barcode, unit_type, bag_weight_kg, purchase_price, selling_price, alert_level, alert_level_kg, expiry_date, image_url, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
   `).run(
       data.name || '',
       data.company ?? null,
       data.category ?? null,
       barcode,
-      data.unit_type ?? 'piece',
+      unitTypeIns,
       data.bag_weight_kg ?? null,
       data.purchase_price ?? 0,
       data.selling_price ?? 0,
-      data.alert_level ?? 0,
+      data.alert_level ?? defaultAlertLevel,
       data.alert_level_kg != null && data.alert_level_kg !== '' ? Number(data.alert_level_kg) : null,
+      imageUrl,
       data.notes ?? null,
       t,
       t
     )
     const id = d.prepare('SELECT last_insert_rowid() as id').get().id
-    const unitType = data.unit_type ?? 'piece'
+    const unitType = unitTypeIns
     const { batches, legacyZeroWarehouses } = buildInitialBatchesFromPayload(data)
 
     const whSynced = new Set()
@@ -1333,6 +1349,13 @@ export function seedInitialBulkStockForProductWithoutBatches(productId, body) {
   return run()
 }
 
+/** Coerce product money fields from PATCH JSON to safe non‑negative numbers. */
+function coerceProductPrice(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return 0
+  return n
+}
+
 export function updateProduct(id, data) {
   const d = getDb()
   const allowed = ['name', 'company', 'category', 'barcode', 'unit_type', 'bag_weight_kg', 'purchase_price', 'selling_price', 'alert_level', 'alert_level_kg', 'expiry_date', 'notes', 'image_url']
@@ -1340,8 +1363,13 @@ export function updateProduct(id, data) {
   const params = []
   for (const k of allowed) {
     if (data[k] !== undefined) {
+      if (k === 'image_url' && data[k] != null && data[k] !== '') {
+        assertProductImageUrlField(String(data[k]))
+      }
+      let v = data[k]
+      if (k === 'purchase_price' || k === 'selling_price') v = coerceProductPrice(v)
       updates.push(`${k} = ?`)
-      params.push(data[k])
+      params.push(v)
     }
   }
   if (updates.length === 0) return getProductById(id)
@@ -1995,18 +2023,25 @@ export function createSupplierReceipt(data) {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(purchaseId, it.product_id, it.quantity ?? 0, it.unit_price ?? 0, (it.quantity || 0) * (it.unit_price || 0), t, expiryDate)
     const purchasePrice = (it.unit_price != null && it.unit_price > 0) ? it.unit_price : null
-    let autoSellingPrice = null
+    let sellingPriceForBatch = null
     if (purchasePrice != null) {
-      const markupPct = parseFloat(getSetting('default_markup_percent') || '0')
-      autoSellingPrice = markupPct > 0
-        ? Math.round(purchasePrice * (1 + markupPct / 100) * 100) / 100
-        : purchasePrice
+      const rawSp = it.selling_price
+      if (rawSp !== undefined && rawSp !== null && String(rawSp).trim() !== '') {
+        const n = Number(rawSp)
+        if (Number.isFinite(n) && n > 0) sellingPriceForBatch = n
+      }
+      if (sellingPriceForBatch == null) {
+        const markupPct = parseFloat(getSetting('default_markup_percent') || '0')
+        sellingPriceForBatch = markupPct > 0
+          ? Math.round(purchasePrice * (1 + markupPct / 100) * 100) / 100
+          : purchasePrice
+      }
       d.prepare('UPDATE products SET purchase_price = ?, selling_price = ?, updated_at = ? WHERE id = ?')
-        .run(purchasePrice, autoSellingPrice, t, it.product_id)
+        .run(purchasePrice, sellingPriceForBatch, t, it.product_id)
     }
     const batchPrices = {
       purchase_price: purchasePrice,
-      selling_price: autoSellingPrice,
+      selling_price: sellingPriceForBatch,
     }
     const batchExpiry = expiryDate || '9999-12-31'
     const dist = it.distribution || {}
@@ -2050,19 +2085,152 @@ export function createSupplierPayment(data) {
 }
 
 // ----- Invoices -----
-export function getInvoices(limit = 50) {
+/**
+ * @param {number | { limit?: number; payment_method?: string; warehouse_id?: number; from?: string; to?: string; unpaid_only?: boolean }} [limitOrOpts]
+ */
+export function getInvoices(limitOrOpts = 50) {
   const d = getDb()
+  const opts = typeof limitOrOpts === 'number' ? { limit: limitOrOpts } : limitOrOpts || {}
+  const limit = Math.min(Number(opts.limit) || 50, 200)
+  const parts = [`COALESCE(invoice_lifecycle, 'active') != 'cancelled'`]
+  const params = []
+  if (opts.unpaid_only) parts.push('COALESCE(remaining_amount, 0) > 0')
+  if (opts.payment_method) {
+    const pm = String(opts.payment_method)
+    if (pm === 'آجل' || pm === 'credit' || pm === 'deferred') {
+      parts.push(`COALESCE(payment_method, '') IN ('آجل', 'credit', 'deferred')`)
+    } else {
+      parts.push('payment_method = ?')
+      params.push(pm)
+    }
+  }
+  if (opts.warehouse_id != null && Number.isFinite(Number(opts.warehouse_id))) {
+    parts.push('warehouse_id = ?')
+    params.push(Number(opts.warehouse_id))
+  }
+  if (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.from).slice(0, 10))) {
+    parts.push('date(created_at) >= date(?)')
+    params.push(String(opts.from).slice(0, 10))
+  }
+  if (opts.to && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.to).slice(0, 10))) {
+    parts.push('date(created_at) <= date(?)')
+    params.push(String(opts.to).slice(0, 10))
+  }
+  const where = parts.join(' AND ')
   const rows = d
-    .prepare(
-      `SELECT * FROM invoices
-       WHERE COALESCE(invoice_lifecycle, 'active') != 'cancelled'
-       ORDER BY id DESC LIMIT ?`
-    )
-    .all(Math.min(limit, 200))
+    .prepare(`SELECT * FROM invoices WHERE ${where} ORDER BY id DESC LIMIT ?`)
+    .all(...params, limit)
   return rows.map(inv => {
     const items = d.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(inv.id)
     return { ...inv, items }
   })
+}
+
+/**
+ * Match Supabase GET /invoices/:id: client balance before/after at invoice time, warehouse name,
+ * and barn balance before/after (initial_debt + barn invoices − barn payments).
+ * @param {Record<string, unknown> & { items?: unknown[] }} inv
+ */
+function enrichInvoiceDetailSnapshot(inv) {
+  if (!inv || inv.client_id == null) return inv
+  const d = getDb()
+  const clientId = inv.client_id
+  const invId = inv.id
+  const ts = inv.created_at || inv.updated_at || new Date().toISOString()
+
+  const initialDebt =
+    d.prepare('SELECT COALESCE(initial_debt, 0) AS d FROM clients WHERE id = ?').get(clientId)?.d ?? 0
+
+  const invSumAfter =
+    d
+      .prepare(
+        `SELECT COALESCE(SUM(total_amount), 0) AS s FROM invoices
+         WHERE client_id = ?
+           AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled')
+           AND ((created_at < ?) OR (created_at = ? AND id <= ?))`
+      )
+      .get(clientId, ts, ts, invId)?.s ?? 0
+
+  const invSumBefore =
+    d
+      .prepare(
+        `SELECT COALESCE(SUM(total_amount), 0) AS s FROM invoices
+         WHERE client_id = ?
+           AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled')
+           AND ((created_at < ?) OR (created_at = ? AND id < ?))`
+      )
+      .get(clientId, ts, ts, invId)?.s ?? 0
+
+  const paySumAfter =
+    d
+      .prepare(
+        `SELECT COALESCE(SUM(${sqlPaymentAmountTowardArExpr('')}), 0) AS s FROM payments
+         WHERE client_id = ? AND created_at <= ?`
+      )
+      .get(clientId, ts)?.s ?? 0
+
+  const paySumBefore =
+    d
+      .prepare(
+        `SELECT COALESCE(SUM(${sqlPaymentAmountTowardArExpr('')}), 0) AS s FROM payments
+         WHERE client_id = ? AND created_at < ?`
+      )
+      .get(clientId, ts)?.s ?? 0
+
+  inv.client_balance_after = initialDebt + invSumAfter - paySumAfter
+  inv.client_balance_before = initialDebt + invSumBefore - paySumBefore
+
+  if (inv.warehouse_id != null) {
+    const whRow = d.prepare('SELECT name_ar FROM warehouses WHERE id = ?').get(inv.warehouse_id)
+    inv.warehouse_name_ar = whRow?.name_ar ?? null
+  }
+
+  const barnId = inv.barn_id
+  if (barnId != null) {
+    const barnInitial =
+      d.prepare('SELECT COALESCE(initial_debt, 0) AS d FROM barns WHERE id = ?').get(barnId)?.d ?? 0
+
+    const barnInvAfter =
+      d
+        .prepare(
+          `SELECT COALESCE(SUM(total_amount), 0) AS s FROM invoices
+           WHERE barn_id = ?
+             AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled')
+             AND ((created_at < ?) OR (created_at = ? AND id <= ?))`
+        )
+        .get(barnId, ts, ts, invId)?.s ?? 0
+
+    const barnInvBefore =
+      d
+        .prepare(
+          `SELECT COALESCE(SUM(total_amount), 0) AS s FROM invoices
+           WHERE barn_id = ?
+             AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled')
+             AND ((created_at < ?) OR (created_at = ? AND id < ?))`
+        )
+        .get(barnId, ts, ts, invId)?.s ?? 0
+
+    const barnPayAfter =
+      d
+        .prepare(
+          `SELECT COALESCE(SUM(${sqlPaymentAmountTowardArExpr('')}), 0) AS s FROM payments
+           WHERE barn_id = ? AND created_at <= ?`
+        )
+        .get(barnId, ts)?.s ?? 0
+
+    const barnPayBefore =
+      d
+        .prepare(
+          `SELECT COALESCE(SUM(${sqlPaymentAmountTowardArExpr('')}), 0) AS s FROM payments
+           WHERE barn_id = ? AND created_at < ?`
+        )
+        .get(barnId, ts)?.s ?? 0
+
+    inv.barn_balance_after = barnInitial + barnInvAfter - barnPayAfter
+    inv.barn_balance_before = barnInitial + barnInvBefore - barnPayBefore
+  }
+
+  return inv
 }
 
 export function getInvoiceById(id) {
@@ -2079,7 +2247,7 @@ export function getInvoiceById(id) {
   `
     )
     .all(id)
-  return { ...inv, items }
+  return enrichInvoiceDetailSnapshot({ ...inv, items })
 }
 
 /** Sync product_warehouse_stock from batch totals (Phase 13 name). */
@@ -3021,7 +3189,7 @@ export function deleteSafeTransaction(id) {
   const d = getDb()
   const row = d.prepare('SELECT * FROM safe_transactions WHERE id = ?').get(id)
   if (!row) return false
-  // لا نحذف الحركات المرتبطة بمدفوعات العملاء أو الموردين حفاظاً على الاتساق
+  // لا نحذف الحركات المرتبطة بسداد العملاء أو الموردين حفاظاً على الاتساق
   if (row.reference_type) {
     throw new Error('لا يمكن حذف حركة مرتبطة بعملية أخرى (دفعة عميل أو مورد).')
   }
@@ -3060,30 +3228,69 @@ function attachInvoiceItems(d, invoices) {
   const ids = invoices.map((i) => i.id)
   const ph = ids.map(() => '?').join(',')
   const items = d
-    .prepare(`SELECT invoice_id, product_name, quantity FROM invoice_items WHERE invoice_id IN (${ph})`)
+    .prepare(`SELECT invoice_id, product_name, quantity, total_price FROM invoice_items WHERE invoice_id IN (${ph})`)
     .all(...ids)
   const byInvoice = new Map()
   for (const it of items) {
     if (!byInvoice.has(it.invoice_id)) byInvoice.set(it.invoice_id, [])
-    byInvoice.get(it.invoice_id).push({ product_name: it.product_name, quantity: it.quantity })
+    byInvoice.get(it.invoice_id).push({
+      product_name: it.product_name,
+      quantity: it.quantity,
+      total_price: it.total_price,
+    })
   }
   for (const inv of invoices) {
     inv.items = byInvoice.get(inv.id) || []
   }
 }
 
-function paymentMethodLabelAr(method) {
-  const m = String(method || '')
-  if (m === 'cash') return 'نقدي'
-  if (m === 'vodafone_cash') return 'فودافون كاش'
-  if (m === 'instapay') return 'انستاباي'
-  if (m === 'historical_invoice_paid') return 'مدفوع (ترحيل)'
-  return m
+function computeInvoiceQuantityUnitPrice(items) {
+  if (!items || items.length === 0) return { quantity: null, unit_price: null }
+  const sumQty = items.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
+  if (sumQty <= 0) return { quantity: null, unit_price: null }
+  if (items.length === 1) {
+    const tp = Number(items[0].total_price) || 0
+    const q = Number(items[0].quantity) || 0
+    return { quantity: sumQty, unit_price: q > 0 ? tp / q : null }
+  }
+  return { quantity: sumQty, unit_price: null }
+}
+
+function statementDisplayAmount(m) {
+  if (m.type === 'invoice') return Number(m.debit || 0)
+  return Math.max(
+    Number(m.display_debit || 0),
+    Number(m.display_credit || 0),
+    Number(m.credit || 0),
+    Number(m.debit || 0)
+  )
+}
+
+function formatPaymentDescriptionAr(amount, paymentMethod) {
+  const m = String(paymentMethod || '')
+  const methodAr =
+    m === 'cash'
+      ? 'كاش'
+      : m === 'deferred'
+        ? 'آجل'
+        : m === 'vodafone_cash'
+          ? 'فودافون كاش'
+          : m === 'instapay'
+            ? 'انستاباي'
+            : m === 'historical_invoice_paid'
+              ? 'مدفوع (ترحيل)'
+              : m || '—'
+  const n = Math.round(Number(amount) || 0)
+  const formatted = new Intl.NumberFormat('ar-EG', {
+    numberingSystem: 'latn',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(n)
+  return `سداد ${formatted} ج.م — ${methodAr}`
 }
 
 function buildAccountStatementRows(baseBalance, invoices, payments) {
   const rows = []
-  let balance = baseBalance
   const merged = [
     ...invoices.map((i) => ({
       date: i.created_at,
@@ -3106,17 +3313,7 @@ function buildAccountStatementRows(baseBalance, invoices, payments) {
       const isDef = p.payment_method === 'deferred'
       const settles = paymentAmountTowardArJs(p)
       const amt = p.amount || 0
-      let desc = p.notes || `دفعة #${p.id}`
-      if (p.invoice_id) {
-        if (isDef) {
-          desc = `فاتورة #${p.invoice_id} — آجل`
-        } else if (settles) {
-          const lab = paymentMethodLabelAr(p.payment_method)
-          desc = `فاتورة #${p.invoice_id} — ${lab}`
-        }
-      } else if (settles && p.payment_method === 'cash' && desc === `دفعة #${p.id}`) {
-        desc = `دفعة #${p.id} — نقدي`
-      }
+      const desc = formatPaymentDescriptionAr(amt, p.payment_method)
       return {
         date: p.payment_date || p.created_at,
         type: 'payment',
@@ -3136,39 +3333,41 @@ function buildAccountStatementRows(baseBalance, invoices, payments) {
     }),
   ]
   merged.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+  let rowSeq = 0
+  let runningBalance = baseBalance
   for (const m of merged) {
-    if (!m.ledger_skip) {
-      balance += (m.debit || 0) - (m.credit || 0)
+    rowSeq += 1
+    const amountForRow = statementDisplayAmount(m)
+    if (m.type === 'invoice') {
+      runningBalance += amountForRow
+    } else {
+      runningBalance -= amountForRow
     }
+    const direction = m.type === 'invoice' ? 'debit' : 'credit'
+    const qpu =
+      m.type === 'invoice' ? computeInvoiceQuantityUnitPrice(m.items || []) : { quantity: null, unit_price: null }
     const row = {
+      id: rowSeq,
       date: m.date,
       type: m.type,
       description: m.description,
-      debit: m.debit,
-      credit: m.credit,
-      display_debit: m.display_debit ?? m.debit,
-      display_credit: m.display_credit ?? m.credit,
-      balance,
+      quantity: qpu.quantity,
+      unit_price: qpu.unit_price,
+      amount: amountForRow,
+      direction,
+      running_balance: runningBalance,
     }
     if (m.type === 'invoice') {
       row.invoice_id = m.invoice_id
-      row.invoice_total = m.invoice_total
-      row.paid = m.paid
-      row.remaining = m.remaining
-      row.status = m.status
-      row.items = m.items || []
-      if (m.barn_name) row.barn_name = m.barn_name
+      if (m.items && m.items.length) row.items = m.items
     } else {
       row.payment_id = m.payment_id
-      row.payment_amount = m.payment_amount
       if (m.payment_method) row.payment_method = m.payment_method
-      if (m.invoice_id_link != null) row.invoice_id = m.invoice_id_link
       if (m.settled_at) row.settled_at = m.settled_at
-      if (m.barn_name) row.barn_name = m.barn_name
     }
     rows.push(row)
   }
-  return { rows, closingBalance: balance }
+  return { rows, closingBalance: runningBalance }
 }
 
 export function getAccountStatementClient(clientId, from, to) {
@@ -3176,7 +3375,8 @@ export function getAccountStatementClient(clientId, from, to) {
   const fromD = normalizeStmtDate(from)
   const toD = normalizeStmtDate(to)
   const client = d.prepare('SELECT initial_debt FROM clients WHERE id = ?').get(clientId)
-  const initialDebt = client?.initial_debt ?? 0
+  const barns = d.prepare('SELECT COALESCE(SUM(initial_debt), 0) AS sum_barns FROM barns WHERE client_id = ?').get(clientId)
+  const initialDebt = (client?.initial_debt ?? 0) + (barns?.sum_barns ?? 0)
 
   const beforeInvoices = d
     .prepare(
@@ -3583,10 +3783,18 @@ export function getAccountStatementAfterBarnCycle(barnId, cycleId) {
 }
 
 // ----- Dashboard -----
-export function getDashboardStats() {
+/** @param {{ from?: string; to?: string }} [opts] When from+to set (YYYY-MM-DD), sales/profit sums are date-scoped. */
+export function getDashboardStats(opts = {}) {
   const d = getDb()
-  const totalSales = d.prepare(`SELECT COALESCE(SUM(total_amount),0) as s FROM invoices WHERE (COALESCE(invoice_lifecycle, 'active') != 'cancelled')`).get()?.s ?? 0
-  const totalProfit = d.prepare(`SELECT COALESCE(SUM(profit_amount),0) as s FROM invoices WHERE (COALESCE(invoice_lifecycle, 'active') != 'cancelled')`).get()?.s ?? 0
+  const from = opts.from && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.from).slice(0, 10)) ? String(opts.from).slice(0, 10) : null
+  const to = opts.to && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.to).slice(0, 10)) ? String(opts.to).slice(0, 10) : null
+  const range = from && to
+  const salesWhere = range
+    ? `WHERE (COALESCE(invoice_lifecycle, 'active') != 'cancelled') AND date(created_at) >= date(?) AND date(created_at) <= date(?)`
+    : `WHERE (COALESCE(invoice_lifecycle, 'active') != 'cancelled')`
+  const salesParams = range ? [from, to] : []
+  const totalSales = d.prepare(`SELECT COALESCE(SUM(total_amount),0) as s FROM invoices ${salesWhere}`).get(...salesParams)?.s ?? 0
+  const totalProfit = d.prepare(`SELECT COALESCE(SUM(profit_amount),0) as s FROM invoices ${salesWhere}`).get(...salesParams)?.s ?? 0
   const unpaidCount = d.prepare(`SELECT COUNT(*) as n FROM invoices WHERE remaining_amount > 0 AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled')`).get()?.n ?? 0
   const clientDebt = (() => {
     const debts = d.prepare('SELECT COALESCE(SUM(initial_debt),0) as s FROM clients').get()?.s ?? 0
@@ -3608,11 +3816,20 @@ export function getDashboardStats() {
   const purchases = d.prepare('SELECT COALESCE(SUM(total_amount),0) as s FROM supplier_purchases').get()?.s ?? 0
   const supplierPayments = d.prepare('SELECT COALESCE(SUM(amount),0) as s FROM supplier_payments').get()?.s ?? 0
   const safeBalance = getSafeBalance()
-  const productCount = d.prepare('SELECT COUNT(*) as n FROM products').get()?.n ?? 0
+  // Find primary warehouse (اجهور) for scoped KPIs
+  const primaryWh = d.prepare(
+    "SELECT id FROM warehouses WHERE name_ar LIKE '%اجهور%' OR name_ar LIKE '%أجهور%' OR LOWER(name_en) LIKE '%aghour%' LIMIT 1"
+  ).get()
+  const primaryWhId = primaryWh?.id ?? 1
+  const productCount = d.prepare(
+    'SELECT COUNT(*) as n FROM product_warehouse_stock WHERE warehouse_id = ? AND COALESCE(quantity,0) > 0'
+  ).get(primaryWhId)?.n ?? 0
   const clientsCount = d.prepare('SELECT COUNT(*) as n FROM clients').get()?.n ?? 0
   const invoicesCount = d.prepare(`SELECT COUNT(*) as n FROM invoices WHERE (COALESCE(invoice_lifecycle, 'active') != 'cancelled')`).get()?.n ?? 0
   let lowStockCount = 0
   let expiringCount = 0
+  let inventoryValuePurchase = 0
+  let inventoryValueSelling = 0
   try {
     lowStockCount =
       d
@@ -3621,20 +3838,18 @@ export function getDashboardStats() {
       SELECT COUNT(*) AS n FROM (
         SELECT p.id
         FROM products p
-        LEFT JOIN (
-          SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id
-        ) s ON s.product_id = p.id
+        JOIN product_warehouse_stock s ON s.product_id = p.id AND s.warehouse_id = ?
         WHERE (
-          (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND COALESCE(s.q, 0) <= p.alert_level)
-          OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND COALESCE(s.q, 0) <= p.alert_level_kg)
+          (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND COALESCE(s.quantity, 0) <= p.alert_level)
+          OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND COALESCE(s.quantity, 0) <= p.alert_level_kg)
         )
       )
     `
         )
-        .get()?.n ?? 0
+        .get(primaryWhId)?.n ?? 0
   } catch (_) { /* ignore */ }
   try {
-    const batchNear = sqlNearExpiryBatchExists(null)
+    const batchNear = sqlNearExpiryBatchExists(primaryWhId)
     expiringCount =
       d
         .prepare(
@@ -3648,7 +3863,29 @@ export function getDashboardStats() {
       )
     `
         )
-        .get()?.n ?? 0
+        .get(primaryWhId)?.n ?? 0
+  } catch (_) { /* ignore */ }
+  try {
+    const invRow = d.prepare(`
+      SELECT
+        COALESCE(SUM(
+          CASE WHEN COALESCE(pb.unit_type, 'piece') = 'bulk'
+            THEN COALESCE(pb.kg_remaining, 0) * COALESCE(pb.purchase_price, p.purchase_price, 0)
+            ELSE COALESCE(pb.quantity, 0) * COALESCE(pb.purchase_price, p.purchase_price, 0)
+          END
+        ), 0) AS inv_purchase,
+        COALESCE(SUM(
+          CASE WHEN COALESCE(pb.unit_type, 'piece') = 'bulk'
+            THEN COALESCE(pb.kg_remaining, 0) * COALESCE(pb.selling_price, p.selling_price, 0)
+            ELSE COALESCE(pb.quantity, 0) * COALESCE(pb.selling_price, p.selling_price, 0)
+          END
+        ), 0) AS inv_selling
+      FROM product_batches pb
+      JOIN products p ON p.id = pb.product_id
+      WHERE pb.warehouse_id = ?
+    `).get(primaryWhId)
+    inventoryValuePurchase = invRow?.inv_purchase ?? 0
+    inventoryValueSelling = invRow?.inv_selling ?? 0
   } catch (_) { /* ignore */ }
   return {
     total_sales: totalSales,
@@ -3663,6 +3900,8 @@ export function getDashboardStats() {
     unpaid_invoices_count: unpaidCount,
     clients_count: clientsCount,
     invoices_count: invoicesCount,
+    inventory_value_purchase: inventoryValuePurchase,
+    inventory_value_selling: inventoryValueSelling,
   }
 }
 
@@ -3821,5 +4060,156 @@ export function getDailyInvoiceTotalsForRange(fromIso, toIso) {
     day: r.day,
     total_sales: r.total_sales ?? 0,
     invoice_count: r.invoice_count ?? 0,
+  }))
+}
+
+/**
+ * Transfer inventory between warehouses (e.g. اجهور → شبرا).
+ * Validates stock, deducts from source batches (LIFO: newest batch first),
+ * creates matching batches in the target warehouse, and updates product_warehouse_stock.
+ */
+export function createInventoryTransfer(data) {
+  const d = getDb()
+  const fromWh = Number(data.from_warehouse_id)
+  const toWh = Number(data.to_warehouse_id)
+  const items = Array.isArray(data.items) ? data.items : []
+  const t = now()
+
+  const transfer = d.transaction(() => {
+    for (const it of items) {
+      const pid = Number(it.product_id)
+      const qty = Number(it.quantity ?? 0)
+      if (!Number.isFinite(pid) || !Number.isFinite(qty) || qty <= 0) {
+        throw new Error(`كمية غير صالحة للمنتج #${pid}`)
+      }
+      // Validate stock
+      const stockRow = d.prepare(
+        'SELECT COALESCE(quantity, 0) AS qty FROM product_warehouse_stock WHERE product_id = ? AND warehouse_id = ?'
+      ).get(pid, fromWh)
+      const available = Number(stockRow?.qty ?? 0)
+      if (qty > available) {
+        const pRow = d.prepare('SELECT name FROM products WHERE id = ?').get(pid)
+        const name = pRow?.name ?? `#${pid}`
+        throw new Error(`الكمية المطلوبة (${qty}) للمنتج «${name}» أكبر من المتاح (${available})`)
+      }
+
+      // ── Deduct from source batches (LIFO: newest batch first by id DESC) ──
+      const sourceBatches = d.prepare(
+        `SELECT * FROM product_batches
+         WHERE product_id = ? AND warehouse_id = ? AND COALESCE(quantity, 0) > 0
+         ORDER BY id DESC`
+      ).all(pid, fromWh)
+      let remaining = qty
+      for (const batch of sourceBatches) {
+        if (remaining <= 0) break
+        const batchQty = Number(batch.quantity ?? 0)
+        const take = Math.min(remaining, batchQty)
+        if (take <= 0) continue
+
+        // Subtract from source batch
+        d.prepare(
+          'UPDATE product_batches SET quantity = MAX(0, quantity - ?), updated_at = ? WHERE id = ?'
+        ).run(take, t, batch.id)
+
+        // Create or update matching batch in target warehouse
+        const existingTarget = d.prepare(
+          `SELECT id, quantity FROM product_batches
+           WHERE product_id = ? AND warehouse_id = ? AND expiry_date = ?
+             AND COALESCE(purchase_price, 0) = COALESCE(?, 0)
+             AND COALESCE(selling_price, 0) = COALESCE(?, 0)
+           LIMIT 1`
+        ).get(pid, toWh, batch.expiry_date, batch.purchase_price, batch.selling_price)
+
+        if (existingTarget) {
+          d.prepare(
+            'UPDATE product_batches SET quantity = quantity + ?, updated_at = ? WHERE id = ?'
+          ).run(take, t, existingTarget.id)
+        } else {
+          d.prepare(
+            `INSERT INTO product_batches
+             (product_id, warehouse_id, expiry_date, quantity, purchase_price, selling_price,
+              unit_type, bag_count, kg_per_bag, kg_remaining, source, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'transfer', ?, ?)`
+          ).run(
+            pid, toWh, batch.expiry_date, take,
+            batch.purchase_price ?? null, batch.selling_price ?? null,
+            batch.unit_type ?? 'piece', null, batch.kg_per_bag ?? null, null,
+            t, t
+          )
+        }
+        remaining -= take
+      }
+
+      // ── Update product_warehouse_stock for both warehouses ──
+      // Subtract from source
+      d.prepare(
+        `UPDATE product_warehouse_stock SET quantity = MAX(0, quantity - ?), updated_at = ? WHERE product_id = ? AND warehouse_id = ?`
+      ).run(qty, t, pid, fromWh)
+      // Add to target (upsert)
+      const existing = d.prepare(
+        'SELECT 1 FROM product_warehouse_stock WHERE product_id = ? AND warehouse_id = ?'
+      ).get(pid, toWh)
+      if (existing) {
+        d.prepare(
+          'UPDATE product_warehouse_stock SET quantity = quantity + ?, updated_at = ? WHERE product_id = ? AND warehouse_id = ?'
+        ).run(qty, t, pid, toWh)
+      } else {
+        d.prepare(
+          'INSERT INTO product_warehouse_stock (product_id, warehouse_id, quantity, updated_at) VALUES (?, ?, ?, ?)'
+        ).run(pid, toWh, qty, t)
+      }
+    }
+
+    // ── Persist transfer log ──
+    d.prepare(
+      'INSERT INTO inventory_transfers (from_warehouse_id, to_warehouse_id, notes, created_at) VALUES (?, ?, ?, ?)'
+    ).run(fromWh, toWh, data.notes ?? null, t)
+    const transferId = d.prepare('SELECT last_insert_rowid() as id').get().id
+    for (const it of items) {
+      const pid = Number(it.product_id)
+      const qty = Number(it.quantity ?? 0)
+      const pRow = d.prepare('SELECT name FROM products WHERE id = ?').get(pid)
+      d.prepare(
+        'INSERT INTO inventory_transfer_items (transfer_id, product_id, product_name, quantity) VALUES (?, ?, ?, ?)'
+      ).run(transferId, pid, pRow?.name ?? `#${pid}`, qty)
+    }
+  })
+
+  transfer()
+}
+
+/**
+ * List transfer history. Returns transfers with their items, newest first.
+ */
+export function getInventoryTransfers(limit = 50) {
+  const d = getDb()
+  const transfers = d.prepare(`
+    SELECT t.*,
+      wf.name_ar AS from_warehouse_name,
+      wt.name_ar AS to_warehouse_name
+    FROM inventory_transfers t
+    LEFT JOIN warehouses wf ON wf.id = t.from_warehouse_id
+    LEFT JOIN warehouses wt ON wt.id = t.to_warehouse_id
+    ORDER BY t.id DESC
+    LIMIT ?
+  `).all(Math.min(limit, 200))
+
+  const ids = transfers.map((t) => t.id)
+  if (ids.length === 0) return []
+
+  const ph = ids.map(() => '?').join(',')
+  const itemRows = d.prepare(
+    `SELECT * FROM inventory_transfer_items WHERE transfer_id IN (${ph}) ORDER BY id`
+  ).all(...ids)
+
+  const itemsByTransfer = {}
+  for (const item of itemRows) {
+    if (!itemsByTransfer[item.transfer_id]) itemsByTransfer[item.transfer_id] = []
+    itemsByTransfer[item.transfer_id].push(item)
+  }
+
+  return transfers.map((t) => ({
+    ...t,
+    items: itemsByTransfer[t.id] ?? [],
   }))
 }

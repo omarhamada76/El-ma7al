@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import Modal from '@/components/Modal'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
+import { normalizeInvoiceScanToken, setInvoiceNewPendingBarcode } from '@/lib/barcodeLookup'
 
 type QuickActionBase = {
   key: string
@@ -68,8 +69,8 @@ const quickActionDefinitions: QuickAction[] = [
     kind: 'link',
     key: 'payment_new',
     to: '/payments/new',
-    label: 'تسجيل دفعة عميل',
-    hint: 'تسجيل دفعة',
+    label: 'تسجيل سداد عميل',
+    hint: 'تسجيل سداد',
     icon: CreditCard,
     color: 'bg-blue-500',
     light: 'bg-blue-50 dark:bg-blue-900/20',
@@ -304,7 +305,7 @@ export default function Dashboard() {
         <p className="text-gray-500 dark:text-gray-400 mt-1">
           {showFinancials
             ? 'اختصارات العمل اليومي والوصول السريع'
-            : 'اختصارات العمل اليومي (فواتير، مخزون، مدفوعات)'}
+            : 'اختصارات العمل اليومي (فواتير، مخزون، سداد)'}
         </p>
       </div>
 
@@ -369,7 +370,9 @@ export default function Dashboard() {
                 const v = (e.target as HTMLInputElement).value?.trim()
                 if (v) {
                   ;(e.target as HTMLInputElement).value = ''
-                  navigate(`/invoices/new?barcode=${encodeURIComponent(v)}`)
+                  const logical = normalizeInvoiceScanToken(v)
+                  setInvoiceNewPendingBarcode(logical)
+                  navigate(`/invoices/new?barcode=${encodeURIComponent(logical)}`)
                 }
               }
             }}
@@ -514,7 +517,7 @@ export default function Dashboard() {
       {invoicesWindowMode === 'maximized' &&
         createPortal(
           <div
-            className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-black/40 dark:bg-black/50 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-6 bg-black/40 dark:bg-black/50 backdrop-blur-[2px]"
             role="presentation"
             onClick={() => setInvoicesWindowMode('minimized')}
           >
@@ -523,8 +526,8 @@ export default function Dashboard() {
               aria-modal="true"
               aria-labelledby="invoices-window-title"
               className={cn(
-                'flex max-h-[min(88vh,760px)] w-full max-w-2xl flex-col overflow-hidden',
-                'rounded-2xl border border-gray-200/90 bg-white shadow-2xl ring-1 ring-black/5',
+                'flex h-[85vh] sm:h-auto sm:max-h-[min(88vh,760px)] w-full max-w-2xl flex-col overflow-hidden',
+                'rounded-t-2xl sm:rounded-2xl border border-gray-200/90 bg-white shadow-2xl ring-1 ring-black/5',
                 'dark:border-gray-600 dark:bg-gray-800 dark:ring-white/10'
               )}
               onClick={(e) => e.stopPropagation()}

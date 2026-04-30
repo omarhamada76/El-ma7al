@@ -1,17 +1,15 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import { Plus, ArrowLeft } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { getPayments } from '@/api/payments'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { paymentMethodLabel } from '@/lib/invoicePdf'
 
 export default function Payments() {
-  const [clientId] = useState('')
   const { data, isLoading } = useQuery({
-    queryKey: ['payments', clientId],
+    queryKey: ['payments'],
     queryFn: () =>
       getPayments({
-        client_id: clientId ? Number(clientId) : undefined,
         limit: 50,
       }),
   })
@@ -21,13 +19,13 @@ export default function Payments() {
   return (
     <div className="space-y-6" dir="rtl">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-xl sm:text-2xl font-bold">سجل المدفوعات</h1>
+        <h1 className="text-xl sm:text-2xl font-bold">سجل السداد</h1>
         <Link
           to="/payments/new"
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium"
         >
           <Plus className="w-4 h-4" />
-          تسجيل دفعة
+          تسجيل سداد
         </Link>
       </div>
 
@@ -43,7 +41,7 @@ export default function Payments() {
           </div>
         ) : payments.length === 0 ? (
           <p className="p-8 text-center text-gray-500 dark:text-gray-400">
-            لا توجد مدفوعات مسجلة.
+            لا يوجد سداد مسجّل.
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -54,7 +52,8 @@ export default function Payments() {
                   <th className="text-right py-3 px-4">العميل</th>
                   <th className="text-right py-3 px-4">العنبر</th>
                   <th className="text-right py-3 px-4">المبلغ</th>
-                  <th className="text-right py-3 px-4">طريقة الدفع</th>
+                  <th className="text-right py-3 px-4">طريقة السداد</th>
+                  <th className="text-right py-3 px-4 w-24"></th>
                 </tr>
               </thead>
               <tbody>
@@ -64,12 +63,39 @@ export default function Payments() {
                     className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30"
                   >
                     <td className="py-2 px-4">{formatDate(p.payment_date)}</td>
-                    <td className="py-2 px-4">—</td>
-                    <td className="py-2 px-4">—</td>
+                    <td className="py-2 px-4">
+                      <Link
+                        to={`/clients/${p.client_id}`}
+                        className="text-primary-600 dark:text-primary-400 hover:underline"
+                      >
+                        {p.client_name ?? `#${p.client_id}`}
+                      </Link>
+                    </td>
+                    <td className="py-2 px-4">
+                      {p.barn_id != null ? (
+                        <Link
+                          to={`/barns/${p.barn_id}`}
+                          className="text-primary-600 dark:text-primary-400 hover:underline"
+                        >
+                          {p.barn_name ?? `#${p.barn_id}`}
+                        </Link>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="py-2 px-4 font-medium">
                       {formatCurrency(p.amount)}
                     </td>
-                    <td className="py-2 px-4">{p.payment_method}</td>
+                    <td className="py-2 px-4">{paymentMethodLabel(p.payment_method)}</td>
+                    <td className="py-2 px-4">
+                      <Link
+                        to={`/payments/${p.id}`}
+                        className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline text-sm"
+                      >
+                        عرض
+                        <ArrowLeft className="w-4 h-4" />
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>

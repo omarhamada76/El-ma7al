@@ -30,9 +30,13 @@ const MOCK_STATS: DashboardStats = {
   invoices_count: 0,
 }
 
-export async function getDashboardStats(): Promise<DashboardStats> {
+export async function getDashboardStats(params: { from?: string; to?: string } = {}): Promise<DashboardStats> {
+  const q = new URLSearchParams()
+  if (params.from) q.set('from', params.from)
+  if (params.to) q.set('to', params.to)
+  const query = q.toString()
   try {
-    return await api.get<DashboardStats>('/reports/dashboard')
+    return await api.get<DashboardStats>(`/reports/dashboard${query ? `?${query}` : ''}`)
   } catch {
     return MOCK_STATS
   }

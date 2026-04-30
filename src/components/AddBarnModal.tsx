@@ -1,18 +1,31 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Modal from './Modal'
+
+export type BarnFormData = { name: string; initial_debt: number }
 
 interface AddBarnModalProps {
   open: boolean
   onClose: () => void
-  onSubmit: (data: { name: string; initial_debt: number }) => Promise<void>
+  initialValues?: BarnFormData | null
+  onSubmit: (data: BarnFormData) => Promise<void>
   hideInitialDebt?: boolean
 }
 
-export default function AddBarnModal({ open, onClose, onSubmit, hideInitialDebt }: AddBarnModalProps) {
+export default function AddBarnModal({ open, onClose, onSubmit, initialValues, hideInitialDebt }: AddBarnModalProps) {
   const [name, setName] = useState('')
   const [initial_debt, setInitialDebt] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (open && initialValues) {
+      setName(initialValues.name)
+      setInitialDebt(initialValues.initial_debt)
+    } else if (open && !initialValues) {
+      setName('')
+      setInitialDebt(0)
+    }
+  }, [open, initialValues])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -24,8 +37,10 @@ export default function AddBarnModal({ open, onClose, onSubmit, hideInitialDebt 
     setLoading(true)
     try {
       await onSubmit({ name: name.trim(), initial_debt: hideInitialDebt ? 0 : initial_debt })
-      setName('')
-      setInitialDebt(0)
+      if (!initialValues) {
+        setName('')
+        setInitialDebt(0)
+      }
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل الحفظ')
@@ -35,7 +50,7 @@ export default function AddBarnModal({ open, onClose, onSubmit, hideInitialDebt 
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="إضافة عنبر">
+    <Modal open={open} onClose={onClose} title={initialValues ? 'تعديل عنبر' : 'إضافة عنبر'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
           <div className="p-2 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
@@ -74,7 +89,7 @@ export default function AddBarnModal({ open, onClose, onSubmit, hideInitialDebt 
             disabled={loading}
             className="flex-1 py-2 rounded-lg bg-primary-600 text-white font-medium hover:bg-primary-700 disabled:opacity-50"
           >
-            {loading ? 'جاري الحفظ...' : 'حفظ'}
+            {loading ? 'جاري الحفظ...' : initialValues ? 'تحديث' : 'حفظ'}
           </button>
         </div>
       </form>

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -18,20 +18,23 @@ import type { Client } from '@/types/api'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddClientModal from '@/components/AddClientModal'
+import SuccessOverlay from '@/components/SuccessOverlay'
 import ContextMenu from '@/components/ContextMenu'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
 
 export default function Clients() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const showFinancials = canViewFinancials(useAuthStore((s) => s.user?.role))
   const [search, setSearch] = useState('')
-  const [sortByDebt, setSortByDebt] = useState(false)
+  const [sortByDebt, setSortByDebt] = useState(() => searchParams.get('sort') === 'debt_desc')
   const [pinnedFilter, setPinnedFilter] = useState<boolean | undefined>(undefined)
   const [addOpen, setAddOpen] = useState(false)
   const [editClient, setEditClient] = useState<Client | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; client: Client } | null>(null)
   const [actionsMenu, setActionsMenu] = useState<{ x: number; y: number; client: Client } | null>(null)
+  const [clientCelebrate, setClientCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
   const queryClient = useQueryClient()
   const createMutation = useMutation({
     mutationFn: createClient,
@@ -64,6 +67,10 @@ export default function Clients() {
       setActionsMenu(null)
     },
   })
+  useEffect(() => {
+    setSortByDebt(searchParams.get('sort') === 'debt_desc')
+  }, [searchParams])
+
   const { data, isLoading } = useQuery({
     queryKey: ['clients', search, pinnedFilter, sortByDebt],
     queryFn: () =>
@@ -81,6 +88,13 @@ export default function Clients() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      <SuccessOverlay
+        open={!!clientCelebrate}
+        title={clientCelebrate?.title ?? ''}
+        subtitle={clientCelebrate?.subtitle}
+        durationMs={1500}
+        onComplete={() => setClientCelebrate(null)}
+      />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-xl sm:text-2xl font-bold">العملاء</h1>
         <button
@@ -100,6 +114,10 @@ export default function Clients() {
               phone: d.phone || null,
               location: d.location || null,
               initial_debt: d.initial_debt,
+            })
+            setClientCelebrate({
+              title: 'تم إضافة العميل بنجاح',
+              subtitle: 'يمكنك المتابعة من القائمة',
             })
           }}
         />
@@ -147,7 +165,14 @@ export default function Clients() {
           {showFinancials && (
             <button
               type="button"
-              onClick={() => setSortByDebt((v) => !v)}
+              onClick={() => {
+                const next = !sortByDebt
+                setSortByDebt(next)
+                const p = new URLSearchParams(searchParams)
+                if (next) p.set('sort', 'debt_desc')
+                else p.delete('sort')
+                setSearchParams(p, { replace: true })
+              }}
               className={cn(
                 'px-3 py-2 rounded-lg text-sm font-medium',
                 sortByDebt
@@ -377,6 +402,7 @@ export default function Clients() {
                 ...(showFinancials ? { initial_debt: data.initial_debt } : {}),
               },
             })
+            setClientCelebrate({ title: 'تم حفظ بيانات العميل بنجاح' })
           }}
         />
       </div>

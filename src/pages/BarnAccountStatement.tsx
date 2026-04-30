@@ -11,7 +11,7 @@ import { getBarnBillingCycles } from '@/api/barnBillingCycles'
 import { getBarn } from '@/api/barns'
 import { getClient } from '@/api/clients'
 import AccountStatementTable from '@/components/AccountStatementTable'
-import { formatCurrency, localISODate } from '@/lib/utils'
+import { cn, formatCurrency, localISODate } from '@/lib/utils'
 import type { AccountStatement } from '@/types/api'
 import {
   createStatementPdfBlob,
@@ -140,9 +140,9 @@ export default function BarnAccountStatement() {
 
   const desc =
     mode === 'custom'
-      ? 'فواتير ومدفوعات مرتبطة بهذا العنبر فقط ضمن الفترة المحددة.'
+      ? 'فواتير وسداد مرتبط بهذا العنبر فقط ضمن الفترة المحددة.'
       : mode === 'cycle'
-        ? 'كشف ضمن دورة محاسبية للعنبر: الرصيد الافتتاحي يشمل المديونية المتراكمة عند بدء الدورة؛ الجدول يعرض فقط الفواتير والدفعات المسجّلة أثناء هذه الدورة.'
+        ? 'كشف ضمن دورة محاسبية للعنبر: الحساب السابق يشمل المديونية المتراكمة عند بدء الدورة؛ الجدول يعرض فقط الفواتير والسداد المسجّل أثناء هذه الدورة.'
         : 'حركات من بعد إغلاق دورة محاسبية للعنبر حتى تاريخ نهاية التقرير.'
 
   if (id && !idValid) {
@@ -155,9 +155,9 @@ export default function BarnAccountStatement() {
 
   return (
     <div className="space-y-6 w-full min-w-0 max-w-full" dir="rtl">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl sm:text-2xl font-bold break-words">
             كشف حساب العنبر {barn?.name ? `— ${barn.name}` : ''}
           </h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-2xl">{desc}</p>
@@ -166,29 +166,29 @@ export default function BarnAccountStatement() {
               to={`/barns/${id}`}
               className="inline-flex items-center gap-1 mt-2 text-sm text-primary-600 dark:text-primary-400 hover:underline"
             >
-              <ArrowRight className="w-4 h-4 rotate-180" />
+              <ArrowRight className="w-4 h-4 rotate-180 shrink-0" />
               العودة لصفحة العنبر
             </Link>
           )}
         </div>
         {statement && (
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto shrink-0">
             <button
               type="button"
               disabled={pdfBusy}
               onClick={handleDownloadPdf}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-3 py-2.5 sm:min-h-0 sm:py-2 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 w-full sm:w-auto"
             >
-              <Download className="h-4 w-4" />
+              <Download className="h-4 w-4 shrink-0" />
               تحميل PDF
             </button>
             <button
               type="button"
               disabled={pdfBusy}
               onClick={handleShareWhatsApp}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg text-white bg-green-600 hover:bg-green-700 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] px-3 py-2.5 sm:min-h-0 sm:py-2 text-sm font-medium rounded-lg text-white bg-green-600 hover:bg-green-700 disabled:opacity-50 w-full sm:w-auto"
             >
-              <Share2 className="h-4 w-4" />
+              <Share2 className="h-4 w-4 shrink-0" />
               واتساب
             </button>
           </div>
@@ -201,8 +201,8 @@ export default function BarnAccountStatement() {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-4 items-end">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:flex-wrap gap-4 sm:items-end">
+        <div className="w-full sm:w-auto min-w-0">
           <label className="block text-sm font-medium mb-1">نوع التقرير</label>
           <select
             value={mode}
@@ -214,7 +214,7 @@ export default function BarnAccountStatement() {
                 setAfterPick('')
               }
             }}
-            className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 min-w-[200px]"
+            className="w-full sm:w-auto sm:min-w-[200px] max-w-full px-3 py-2.5 sm:py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-base"
           >
             <option value="custom">فترة حرّة (من — إلى)</option>
             <option value="cycle">دورة محاسبية</option>
@@ -223,12 +223,12 @@ export default function BarnAccountStatement() {
         </div>
 
         {mode === 'cycle' && (
-          <div>
+          <div className="w-full sm:w-auto min-w-0">
             <label className="block text-sm font-medium mb-1">الدورة</label>
             <select
               value={cyclePick === '' ? '' : String(cyclePick)}
               onChange={(e) => setCyclePick(e.target.value ? Number(e.target.value) : '')}
-              className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 min-w-[220px]"
+              className="w-full sm:w-auto sm:min-w-[220px] max-w-full px-3 py-2.5 sm:py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-base"
             >
               <option value="">— اختر دورة —</option>
               {cycles.map((c) => (
@@ -242,12 +242,12 @@ export default function BarnAccountStatement() {
         )}
 
         {mode === 'after' && (
-          <div>
+          <div className="w-full sm:w-auto min-w-0">
             <label className="block text-sm font-medium mb-1">بعد إغلاق الدورة</label>
             <select
               value={afterPick === '' ? '' : String(afterPick)}
               onChange={(e) => setAfterPick(e.target.value ? Number(e.target.value) : '')}
-              className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 min-w-[220px]"
+              className="w-full sm:w-auto sm:min-w-[220px] max-w-full px-3 py-2.5 sm:py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-base"
             >
               <option value="">— اختر دورة مغلقة —</option>
               {closedCycles.map((c) => (
@@ -261,22 +261,22 @@ export default function BarnAccountStatement() {
 
         {mode === 'custom' && (
           <>
-            <div>
+            <div className="w-full sm:w-auto min-w-0">
               <label className="block text-sm font-medium mb-1">من تاريخ</label>
               <input
                 type="date"
                 value={from}
                 onChange={(e) => setFrom(e.target.value)}
-                className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-base"
               />
             </div>
-            <div>
+            <div className="w-full sm:w-auto min-w-0">
               <label className="block text-sm font-medium mb-1">إلى تاريخ</label>
               <input
                 type="date"
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
-                className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-base"
               />
             </div>
           </>
@@ -298,18 +298,26 @@ export default function BarnAccountStatement() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-amber-50 dark:bg-amber-900/20">
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              {statement.cycle ? 'الرصيد الافتتاحي (يشمل المديونية المتراكمة)' : 'الرصيد الافتتاحي'}
+              {statement.cycle ? 'الحساب السابق (يشمل المديونية المتراكمة)' : 'الحساب السابق'}
             </p>
             <p className="text-xl font-bold">{formatCurrency(statement.opening_balance)}</p>
           </div>
           <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-emerald-50 dark:bg-emerald-900/20">
-            <p className="text-sm text-gray-600 dark:text-gray-400">الرصيد الختامي</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400">الرصيد الحالي</p>
             <p className="text-xl font-bold">{formatCurrency(statement.closing_balance)}</p>
           </div>
         </div>
       )}
 
-      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-x-auto">
+      <div
+        className={cn(
+          'block w-max min-w-full max-w-6xl mx-auto rounded-xl',
+          'border border-gray-200 dark:border-gray-700',
+          'bg-white dark:bg-gray-800',
+          'px-0 py-3 sm:px-4 sm:py-4 md:px-5 md:py-5',
+          'shadow-sm sm:ring-1 sm:ring-gray-950/[0.06] dark:sm:ring-white/10'
+        )}
+      >
         <AccountStatementTable rows={statement?.rows ?? []} isLoading={isLoading} />
       </div>
     </div>

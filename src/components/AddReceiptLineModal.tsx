@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import Modal from './Modal'
-import { cn } from '@/lib/utils'
+import { cn, fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
 import type { Product } from '@/types/api'
 
 interface AddReceiptLineModalProps {
@@ -104,9 +104,9 @@ export default function AddReceiptLineModal({
           <div>
             <label className="block text-sm font-medium mb-1">تاريخ الصلاحية</label>
             <input
-              type="date"
-              value={expiryDate}
-              onChange={(e) => setExpiryDate(e.target.value)}
+              type="month"
+              value={toMonthInputValue(expiryDate)}
+              onChange={(e) => setExpiryDate(fromMonthInputValue(e.target.value) ?? '')}
               required
               className={cn(
                 'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800 text-sm',

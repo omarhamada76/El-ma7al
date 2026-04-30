@@ -160,6 +160,23 @@ export async function getWarehouseBatches(
   return Array.isArray(res) ? res : []
 }
 
+export type ProductBatchLookup =
+  | { status: 'ok'; batch: ProductBatch }
+  | { status: 'not_found' }
+  | { status: 'request_failed'; message: string }
+
+/** Resolve a batch by id when it may be missing from `getWarehouseBatches` (e.g. zero-qty rows filtered server-side). */
+export async function lookupProductBatchById(batchId: number): Promise<ProductBatchLookup> {
+  try {
+    const batch = await api.get<ProductBatch>(`/batches/${batchId}`)
+    return { status: 'ok', batch }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (/\b404\b|غير موجودة|Not found/i.test(msg)) return { status: 'not_found' }
+    return { status: 'request_failed', message: msg }
+  }
+}
+
 export async function updateBatchSellingPrice(
   batchId: number,
   sellingPrice: number

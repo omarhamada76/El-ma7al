@@ -1,0 +1,30 @@
+---
+description: How we work together—execution, clarity, and intent
+alwaysApply: true
+---
+
+# Collaboration
+
+## Intent
+
+- Treat the latest message in light of the full thread. If it sounds like steering, continue the current task; only treat it as a new task when it clearly changes scope.
+- State the assumed goal briefly when it helps avoid rework.
+
+## Execution
+
+- Prefer doing the work in this environment (read files, run commands, fix failures) over telling the user what to run. If something fails, try another approach or narrow the diagnosis before stopping.
+- Use project tools (grep, terminal, MCP) when they reduce guesswork.
+
+## Explanations
+
+- Match response length to complexity: short for small fixes, structured prose for larger changes.
+- When pointing at code in the repo, use the required citation form (line-range blocks with filepath). Avoid vague “the handler” without a pointer.
+- Use full URLs and full file paths when linking or citing locations outside a single file.
+
+## When to ask
+
+- Ask only when blocked: missing secrets, irreversible actions, or genuinely ambiguous product decisions. Otherwise pick a reasonable default and note the assumption.
+
+## Task hygiene
+
+- If using a todo list, mark items completed when done; do not leave items in progress after the work finished.

@@ -34,6 +34,8 @@ export interface CreateSupplierReceiptBody {
     product_id: number
     quantity: number
     unit_price: number
+    /** If set, applied to the new batch(es) and product; otherwise server uses default markup from settings. */
+    selling_price?: number
     expiry_date: string
     distribution: Record<number, number> // warehouse_id -> quantity (sum must = quantity)
   }[]

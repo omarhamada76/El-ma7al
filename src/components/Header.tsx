@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { LogOut, Menu, Moon, Sun, User } from 'lucide-react'
+import { LogOut, Menu, Moon, Sun, User, Settings } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { cn } from '@/lib/utils'
 
@@ -64,28 +64,33 @@ export default function Header({ onMenuClick }: HeaderProps) {
           </button>
           <div
             className={cn(
-              'absolute top-full left-0 right-auto mt-1 py-1 w-48 max-w-[calc(100vw-2rem)] bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50',
-              userMenuOpen ? 'block' : 'hidden'
+              'absolute top-full left-0 mt-3 py-1.5 w-56 max-w-[calc(100vw-2rem)] bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 z-50',
+              'transition-all origin-top-left',
+              userMenuOpen ? 'scale-100 opacity-100' : 'scale-95 opacity-0 pointer-events-none'
             )}
           >
+            <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 mb-1 sm:hidden">
+              <p className="text-xs font-bold text-gray-500 uppercase">المستخدم</p>
+              <p className="text-sm font-semibold truncate">{user?.display_name || user?.email}</p>
+            </div>
             <Link
               to="/settings"
-              className="flex items-center gap-2 px-3 py-2.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded min-h-[44px] items-center"
+              className="flex items-center gap-3 px-4 py-3 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               onClick={() => setUserMenuOpen(false)}
             >
-              <User className="w-4 h-4" />
-              الإعدادات
+              <Settings className="w-4 h-4 text-gray-400" />
+              <span>الإعدادات</span>
             </Link>
             <button
               type="button"
-              className="flex items-center gap-2 w-full px-3 py-2.5 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-red-600 dark:text-red-400 min-h-[44px] items-center text-right"
+              className="flex items-center gap-3 w-full px-4 py-3 text-sm font-medium hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors text-right"
               onClick={() => {
                 logout()
                 setUserMenuOpen(false)
               }}
             >
               <LogOut className="w-4 h-4" />
-              تسجيل الخروج
+              <span>تسجيل الخروج</span>
             </button>
           </div>
         </div>

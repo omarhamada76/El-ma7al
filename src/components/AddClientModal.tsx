@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import Modal from './Modal'
 import { cn } from '@/lib/utils'
 
-export type ClientFormData = { name: string; phone: string; location: string; initial_debt: number }
+export type ClientFormData = { name: string; phone: string; location: string; initial_debt: number; notes?: string }
 
 interface AddClientModalProps {
   open: boolean
@@ -19,6 +19,7 @@ export default function AddClientModal({ open, onClose, initialValues, onSubmit,
   const [phone, setPhone] = useState('')
   const [location, setLocation] = useState('')
   const [initial_debt, setInitialDebt] = useState(0)
+  const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -28,11 +29,13 @@ export default function AddClientModal({ open, onClose, initialValues, onSubmit,
       setPhone(initialValues.phone || '')
       setLocation(initialValues.location || '')
       setInitialDebt(initialValues.initial_debt ?? 0)
+      setNotes(initialValues.notes || '')
     } else if (open && !initialValues) {
       setName('')
       setPhone('')
       setLocation('')
       setInitialDebt(0)
+      setNotes('')
     }
   }, [open, initialValues])
 
@@ -50,12 +53,14 @@ export default function AddClientModal({ open, onClose, initialValues, onSubmit,
         phone: phone.trim() || '',
         location: location.trim() || '',
         initial_debt: hideInitialDebt ? 0 : initial_debt,
+        notes: notes.trim() || '',
       })
       if (!initialValues) {
         setName('')
         setPhone('')
         setLocation('')
         setInitialDebt(0)
+        setNotes('')
       }
       onClose()
     } catch (err) {
@@ -118,6 +123,15 @@ export default function AddClientModal({ open, onClose, initialValues, onSubmit,
             />
           </div>
         )}
+        <div>
+          <label className="block text-sm font-medium mb-1">ملاحظات <span className="text-gray-400 font-normal">(اختياري)</span></label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 min-h-[80px]"
+            placeholder="أية ملاحظات إضافية عن العميل..."
+          />
+        </div>
         <div className="flex gap-2 pt-2">
           <button
             type="button"

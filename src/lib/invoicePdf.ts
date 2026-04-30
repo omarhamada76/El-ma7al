@@ -1,15 +1,25 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
-import type { Invoice, InvoiceItem } from '@/types/api'
+import type { Invoice, InvoiceItem, Payment } from '@/types/api'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { quantityColumnHeaderFromInvoiceItems } from '@/lib/quantityColumnHeader'
 
 const SHOP_NAME = 'الصيدلية البيطرية'
 
-export function paymentMethodLabel(raw: string): string {
-  if (raw === 'cash') return 'كاش'
-  if (raw === 'آجل' || raw === 'credit') return 'آجل'
-  return raw
+export function paymentMethodLabel(raw: string | null | undefined): string {
+  if (raw == null || raw === '') return '—'
+  const s = String(raw).trim()
+  if (s === 'cash') return 'كاش'
+  if (s === 'آجل' || s === 'credit' || s === 'deferred') return 'آجل'
+  if (s === 'vodafone_cash') return 'فودافون كاش'
+  if (s === 'instapay') return 'انستاباي'
+  if (s === 'discount') return 'خصم مديونية'
+  return s
+}
+
+/** فاتورة كاش تُظهر المدفوع؛ فاتورة آجل لا تعرض سطر «المدفوع» */
+export function isInvoiceCashPayment(raw: string | null | undefined): boolean {
+  return raw === 'cash'
 }
 
 /** E.164 digits for wa.me (e.g. 2010xxxxxxxx), no + */
@@ -32,10 +42,16 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+export type InvoicePdfBalance = {
+  before: number
+  after: number
+}
+
 function buildInvoiceHtml(
   invoice: Invoice & { items: InvoiceItem[] },
   warehouseName: string,
-  barnName?: string | null
+  barnName?: string | null,
+  barnBalance?: InvoicePdfBalance | null
 ): string {
   const discount = Number(invoice.discount_amount) || 0
   const barnLine =
@@ -71,8 +87,19 @@ function buildInvoiceHtml(
       <tr><td style="padding:4px 0;color:#555;">طريقة الدفع</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(paymentMethodLabel(invoice.payment_method))}</td></tr>
       <tr><td style="padding:4px 0;color:#555;">المجموع</td><td style="padding:4px 0;font-weight:700;">${formatCurrency(invoice.total_amount)}</td></tr>
       ${discount > 0 ? `<tr><td style="padding:4px 0;color:#555;">الخصم</td><td style="padding:4px 0;">${formatCurrency(discount)}</td></tr>` : ''}
-      <tr><td style="padding:4px 0;color:#555;">المدفوع / المتبقي</td><td style="padding:4px 0;">${formatCurrency(invoice.paid_amount)} / ${formatCurrency(invoice.remaining_amount)}</td></tr>
-      <tr><td style="padding:4px 0;color:#555;">الحالة</td><td style="padding:4px 0;">${escapeHtml(invoice.status)}</td></tr>
+      ${
+        isInvoiceCashPayment(invoice.payment_method)
+          ? `<tr><td style="padding:4px 0;color:#555;">المدفوع / المتبقي</td><td style="padding:4px 0;">${formatCurrency(invoice.paid_amount)} / ${formatCurrency(invoice.remaining_amount)}</td></tr>`
+          : ''
+      }
+      ${
+        barnBalance != null &&
+        Number.isFinite(barnBalance.before) &&
+        Number.isFinite(barnBalance.after)
+          ? `<tr><td style="padding:4px 0;color:#555;">رصيد العنبر قبل الفاتورة</td><td style="padding:4px 0;font-weight:600;">${formatCurrency(barnBalance.before)}</td></tr>
+             <tr><td style="padding:4px 0;color:#555;">رصيد العنبر بعد الفاتورة</td><td style="padding:4px 0;font-weight:600;">${formatCurrency(barnBalance.after)}</td></tr>`
+          : ''
+      }
     </table>
     <div style="font-size:14px;font-weight:700;margin:12px 0 8px;">الأصناف</div>
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -92,7 +119,8 @@ function buildInvoiceHtml(
 export async function createInvoicePdfBlob(
   invoice: Invoice & { items: InvoiceItem[] },
   warehouseName: string,
-  barnName?: string | null
+  barnName?: string | null,
+  barnBalance?: InvoicePdfBalance | null
 ): Promise<Blob> {
   const wrap = document.createElement('div')
   wrap.setAttribute('dir', 'rtl')
@@ -110,7 +138,7 @@ export async function createInvoicePdfBlob(
     'box-sizing:border-box',
   ].join(';')
 
-  wrap.innerHTML = buildInvoiceHtml(invoice, warehouseName, barnName)
+  wrap.innerHTML = buildInvoiceHtml(invoice, warehouseName, barnName, barnBalance)
   document.body.appendChild(wrap)
 
   try {
@@ -222,6 +250,153 @@ export async function shareInvoicePdfToWhatsApp(
   }
 
   // PC / desktop: open WhatsApp Web directly (no wa.me redirect)
+  const waUrl = phone
+    ? `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${text}`
+    : `https://web.whatsapp.com/send?text=${text}`
+  window.open(waUrl, '_blank', 'noopener,noreferrer')
+}
+
+export type PaymentPdfBalance = { before: number; after: number }
+
+export function buildPaymentHtml(
+  payment: Payment,
+  barnBalance?: PaymentPdfBalance | null
+): string {
+  const client = escapeHtml(payment.client_name ?? `عميل #${payment.client_id}`)
+  const barn =
+    payment.barn_id != null
+      ? escapeHtml(payment.barn_name ?? `عنبر #${payment.barn_id}`)
+      : '—'
+  const barnRows =
+    barnBalance != null &&
+    Number.isFinite(barnBalance.before) &&
+    Number.isFinite(barnBalance.after)
+      ? `<tr><td style="padding:4px 0;color:#555;">رصيد العنبر قبل السداد</td><td style="padding:4px 0;font-weight:600;">${formatCurrency(barnBalance.before)}</td></tr>
+         <tr><td style="padding:4px 0;color:#555;">رصيد العنبر بعد السداد</td><td style="padding:4px 0;font-weight:600;">${formatCurrency(barnBalance.after)}</td></tr>`
+      : ''
+  return `
+    <div style="text-align:center;font-size:18px;font-weight:700;margin-bottom:16px;">${escapeHtml(SHOP_NAME)}</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:12px;">سداد عميل #${payment.id}</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px;font-size:13px;">
+      <tr><td style="padding:4px 0;color:#555;">تاريخ السداد</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(formatDate(payment.payment_date))}</td></tr>
+      <tr><td style="padding:4px 0;color:#555;">مبلغ السداد</td><td style="padding:4px 0;font-weight:700;">${formatCurrency(payment.amount)}</td></tr>
+      <tr><td style="padding:4px 0;color:#555;">طريقة السداد</td><td style="padding:4px 0;font-weight:600;">${escapeHtml(paymentMethodLabel(payment.payment_method))}</td></tr>
+      <tr><td style="padding:4px 0;color:#555;">العميل</td><td style="padding:4px 0;font-weight:600;">${client}</td></tr>
+      <tr><td style="padding:4px 0;color:#555;">العنبر</td><td style="padding:4px 0;font-weight:600;">${barn}</td></tr>
+      ${barnRows}
+      ${payment.notes ? `<tr><td style="padding:4px 0;color:#555;vertical-align:top;">ملاحظات</td><td style="padding:4px 0;">${escapeHtml(payment.notes)}</td></tr>` : ''}
+    </table>
+  `
+}
+
+export async function createPaymentPdfBlob(
+  payment: Payment,
+  barnBalance?: PaymentPdfBalance | null
+): Promise<Blob> {
+  const wrap = document.createElement('div')
+  wrap.setAttribute('dir', 'rtl')
+  wrap.style.cssText = [
+    'position:fixed',
+    'left:-12000px',
+    'top:0',
+    'width:720px',
+    'background:#ffffff',
+    'color:#111827',
+    'padding:28px',
+    'font-family:"IBM Plex Sans Arabic","Segoe UI",Tahoma,Arial,sans-serif',
+    'font-size:14px',
+    'line-height:1.5',
+    'box-sizing:border-box',
+  ].join(';')
+
+  wrap.innerHTML = buildPaymentHtml(payment, barnBalance)
+  document.body.appendChild(wrap)
+
+  try {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    const canvas = await html2canvas(wrap, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+    })
+
+    const imgData = canvas.toDataURL('image/png')
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const pageWidth = pdf.internal.pageSize.getWidth()
+    const pageHeight = pdf.internal.pageSize.getHeight()
+    const imgWidth = pageWidth
+    const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+    let heightLeft = imgHeight
+    let position = 0
+    let page = 0
+
+    while (heightLeft > 0) {
+      if (page > 0) pdf.addPage()
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight)
+      heightLeft -= pageHeight
+      position -= pageHeight
+      page++
+    }
+
+    return pdf.output('blob')
+  } finally {
+    document.body.removeChild(wrap)
+  }
+}
+
+/** مشاركة PDF سداد عميل عبر واتساب (نفس سلوك الفاتورة) */
+export async function sharePaymentPdfToWhatsApp(
+  pdfBlob: Blob,
+  paymentId: number,
+  options?: { phoneDigits?: string }
+): Promise<void> {
+  const filename = `سداد-${paymentId}.pdf`
+  const caption = `سداد عميل رقم ${paymentId} — ${SHOP_NAME}`
+  const phone = options?.phoneDigits
+  const file = new File([pdfBlob], filename, { type: 'application/pdf' })
+
+  const hint =
+    'تم تحميل ملف PDF في مجلد التحميلات.\n' +
+    'في واتساب: اضغط 📎 (إرفاق) واختر الملف لإرساله.'
+
+  let canShareFiles = false
+  try {
+    canShareFiles =
+      typeof navigator !== 'undefined' &&
+      typeof navigator.share === 'function' &&
+      typeof navigator.canShare === 'function' &&
+      navigator.canShare({ files: [file] })
+  } catch {
+    canShareFiles = false
+  }
+
+  if (isMobileDevice() && canShareFiles) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: `سداد #${paymentId}`,
+        text: caption,
+      })
+      return
+    } catch (err) {
+      const e = err as { name?: string }
+      if (e?.name === 'AbortError') return
+    }
+  }
+
+  downloadPdfBlob(pdfBlob, filename)
+
+  const body = `${caption}\n\n${hint}`
+  const text = encodeURIComponent(body)
+
+  if (isMobileDevice()) {
+    const waUrl = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`
+    window.open(waUrl, '_blank', 'noopener,noreferrer')
+    return
+  }
+
   const waUrl = phone
     ? `https://web.whatsapp.com/send?phone=${encodeURIComponent(phone)}&text=${text}`
     : `https://web.whatsapp.com/send?text=${text}`

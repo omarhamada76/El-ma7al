@@ -7,9 +7,13 @@ export interface InvoicesParams {
   client_id?: number
   barn_id?: number
   warehouse_id?: number
+  /** فلترة حسب طريقة الدفع للفاتورة: `cash` (كاش) أو `آجل` (يشمل credit/deferred في الخادم) */
+  payment_method?: string
   status?: string
   from?: string
   to?: string
+  /** فواتير عليها متبقي (غير مسددة بالكامل) */
+  unpaid?: boolean
 }
 
 export interface CreateInvoiceBody {
@@ -47,7 +51,15 @@ export async function getInvoices(params: InvoicesParams = {}): Promise<{
   total: number
 }> {
   const q = new URLSearchParams()
-  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '') q.set(k, String(v)) })
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === '') return
+    if (k === 'unpaid' && v === true) {
+      q.set('unpaid', '1')
+      return
+    }
+    if (k === 'unpaid') return
+    q.set(k, String(v))
+  })
   return api.get(`/invoices${q.toString() ? `?${q}` : ''}`)
 }
 

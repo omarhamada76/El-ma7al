@@ -1,3 +1,4 @@
+import 'dotenv/config'
 /**
  * Local backend for Vet Pharmacy Dashboard.
  * Run: npm run server (or node server/index.js)
@@ -8,7 +9,7 @@ import http from 'http'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import * as db from './db.js'
+import * as db from './pgdb.js'
 import * as auth from './auth.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -197,9 +198,9 @@ function sanitizeInvoiceForStaff(inv) {
 }
 
 /** Edit-window metadata for invoice detail / edit UI (setting read fresh each request). */
-function attachInvoiceEditMeta(inv, role) {
+async function attachInvoiceEditMeta(inv, role) {
   if (!inv?.id) return inv
-  const st = db.getInvoiceEditWindowStatus(inv.id)
+  const st = await db.getInvoiceEditWindowStatus(inv.id)
   if (!st) return inv
   const allowed = st.withinWindow || role === 'super_admin'
   return {
@@ -231,11 +232,11 @@ function parseUrl(req) {
 // ----- Handlers -----
 const handlers = {
   'GET /api/v1/auth/status': async (req, res) => {
-    const n = db.countUsers()
+    const n = await db.countUsers()
     send(res, 200, { needsBootstrap: n === 0, hasUsers: n > 0 })
   },
   'POST /api/v1/auth/bootstrap': async (req, res, body) => {
-    if (db.countUsers() > 0) return send(res, 403, { message: 'يوجد مستخدمون بالفعل' })
+    if ((await db.countUsers()) > 0) return send(res, 403, { message: 'يوجد مستخدمون بالفعل' })
     const { email, password, display_name } = body || {}
     if (!email?.trim() || !password) {
       return send(res, 400, { message: 'البريد وكلمة المرور مطلوبان' })
@@ -244,7 +245,7 @@ const handlers = {
       return send(res, 400, { message: 'كلمة المرور 8 أحرف على الأقل للمسؤول الأول' })
     }
     try {
-      const user = db.createUser({
+      const user = await db.createUser({
         email: email.trim(),
         password,
         display_name: display_name || 'مدير النظام',
@@ -264,13 +265,13 @@ const handlers = {
     const { email, password } = body || {}
     if (!email || !password) return send(res, 400, { message: 'البريد وكلمة المرور مطلوبان' })
     if (password.length < 6) return send(res, 400, { message: 'كلمة المرور 6 أحرف على الأقل' })
-    if (db.countUsers() === 0) {
+    if ((await db.countUsers()) === 0) {
       return send(res, 503, {
         message: 'لم يُنشأ حساب بعد. أنشئ حساب المسؤول الأول من نفس الشاشة.',
         needsBootstrap: true,
       })
     }
-    const user = db.verifyUserPassword(email, password)
+    const user = await db.verifyUserPassword(email, password)
     if (!user) return send(res, 401, { message: 'البريد أو كلمة المرور غير صحيحة' })
     const accessToken = auth.signAccessToken(user)
     send(res, 200, { accessToken, refreshToken: accessToken, user })
@@ -279,13 +280,13 @@ const handlers = {
   'GET /api/v1/auth/me': async (req, res) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(req.auth.sub, 10)
-    const user = db.getUserPublic(id)
+    const user = await db.getUserPublic(id)
     if (!user) return send(res, 401, { message: 'Unauthorized' })
     send(res, 200, user)
   },
   'GET /api/v1/users': async (req, res) => {
     if (!requireManageUsers(req, res)) return
-    send(res, 200, { data: db.listUsersPublic() })
+    send(res, 200, { data: await db.listUsersPublic() })
   },
   'POST /api/v1/users': async (req, res, body) => {
     if (!requireManageUsers(req, res)) return
@@ -299,7 +300,7 @@ const handlers = {
     }
     try {
       assertRoleCreatableByRequester(req.auth.role, role)
-      const user = db.createUser({
+      const user = await db.createUser({
         email: email.trim(),
         password,
         display_name: display_name || '',
@@ -318,7 +319,7 @@ const handlers = {
     if (!requireManageUsers(req, res)) return
     const id = parseInt(pathParts[1], 10)
     if (!Number.isFinite(id)) return send(res, 400, { message: 'معرف غير صالح' })
-    const existing = db.getUserById(id)
+    const existing = await db.getUserById(id)
     if (!existing) return send(res, 404, { message: 'المستخدم غير موجود' })
     if (existing.role === 'super_admin' && req.auth.role !== 'super_admin') {
       return send(res, 403, { message: 'لا يمكن تعديل مدير نظام إلا من قبل مدير نظام آخر' })
@@ -331,7 +332,7 @@ const handlers = {
       }
     }
     try {
-      const row = db.updateUser(id, {
+      const row = await db.updateUser(id, {
         display_name: body.display_name,
         role: body.role,
         is_active: body.is_active,
@@ -347,7 +348,7 @@ const handlers = {
     if (!requireManageUsers(req, res)) return
     const id = parseInt(pathParts[1], 10)
     if (!Number.isFinite(id)) return send(res, 400, { message: 'معرف غير صالح' })
-    const existing = db.getUserById(id)
+    const existing = await db.getUserById(id)
     if (!existing) return send(res, 404, { message: 'المستخدم غير موجود' })
     if (String(id) === String(req.auth.sub)) {
       return send(res, 400, { message: 'لا يمكن حذف حسابك الحالي' })
@@ -356,16 +357,19 @@ const handlers = {
       return send(res, 403, { message: 'لا يمكن حذف مدير نظام إلا من قبل مدير نظام آخر' })
     }
     try {
-      const ok = db.deleteUser(id)
+      const ok = await db.deleteUser(id)
       if (!ok) return send(res, 404, { message: 'المستخدم غير موجود' })
       send(res, 204)
     } catch (e) {
       send(res, 400, { message: e.message || 'لا يمكن حذف المستخدم' })
     }
   },
-  'GET /api/v1/reports/dashboard': async (req, res) => {
+  'GET /api/v1/reports/dashboard': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
-    const stats = db.getDashboardStats()
+    const stats = await db.getDashboardStats({
+      from: query.from || undefined,
+      to: query.to || undefined,
+    })
     if (req.auth.role === 'staff') {
       return send(res, 200, {
         ...stats,
@@ -374,6 +378,8 @@ const handlers = {
         client_debt: 0,
         safe_balance: 0,
         supplier_payable: 0,
+        inventory_value_purchase: 0,
+        inventory_value_selling: 0,
       })
     }
     send(res, 200, stats)
@@ -382,8 +388,13 @@ const handlers = {
   'GET /api/v1/clients': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 500)
-    const list = db.getClients(query.search, query.pinned === 'true', limit, query.sort || undefined)
-    const thr = parseFloat(db.getSetting('client_debt_alert_threshold_egp') || '5000')
+    const list = await db.getClients(
+      query.search,
+      query.pinned === 'true',
+      limit,
+      query.sort || undefined
+    )
+    const thr = parseFloat((await db.getSetting('client_debt_alert_threshold_egp')) || '5000')
     const debt_alert_threshold_egp = Number.isFinite(thr) ? thr : 5000
     if (req.auth.role === 'staff') {
       const data = list.map((c) => sanitizeClientForStaff(c))
@@ -397,7 +408,7 @@ const handlers = {
     if (req.auth.role === 'staff') {
       payload.initial_debt = 0
     }
-    const row = db.createClient(payload)
+    const row = await db.createClient(payload)
     send(res, 200, req.auth.role === 'staff' ? sanitizeClientForStaff(row) : row)
   },
   'GET /api/v1/clients/:id/account-statement': async (req, res, _body, { pathParts, query }) => {
@@ -406,10 +417,19 @@ const handlers = {
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
     const from = query.from || undefined
     const to = query.to || undefined
-    const result = db.getAccountStatementClient(clientId, from, to)
+    const result = await db.getAccountStatementClient(clientId, from, to)
     if (process.env.NODE_ENV !== 'production') {
       console.log('[account-statement client]', { clientId, from, to, rows: result.rows?.length })
     }
+    send(res, 200, result)
+  },
+  'GET /api/v1/clients/:id/statement': async (req, res, _body, { pathParts, query }) => {
+    if (!requireNotStaff(req, res)) return
+    const clientId = parseInt(pathParts[1], 10)
+    if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
+    const from = query.from || undefined
+    const to = query.to || undefined
+    const result = await db.getAccountStatementClient(clientId, from, to)
     send(res, 200, result)
   },
   'GET /api/v1/clients/:id/statement-after-cycle': async (req, res, _body, { pathParts, query }) => {
@@ -420,7 +440,7 @@ const handlers = {
     if (!Number.isFinite(cycleId)) {
       return send(res, 400, { message: 'معرف الدورة (cycle_id) مطلوب' })
     }
-    const result = db.getAccountStatementAfterCycle(clientId, cycleId)
+    const result = await db.getAccountStatementAfterCycle(clientId, cycleId)
     if (!result) {
       return send(res, 404, { message: 'الدورة غير موجودة أو لم تُغلق بعد' })
     }
@@ -430,20 +450,20 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const clientId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
-    const c = db.getClientById(clientId)
+    const c = await db.getClientById(clientId)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
-    const list = db.getClientBillingCycles(clientId)
-    const open = db.getOpenBillingCycle(clientId)
+    const list = await db.getClientBillingCycles(clientId)
+    const open = await db.getOpenBillingCycle(clientId)
     send(res, 200, { data: list, open_cycle_id: open?.id ?? null })
   },
   'POST /api/v1/clients/:id/billing-cycles/start': async (req, res, body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const clientId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
-    const c = db.getClientById(clientId)
+    const c = await db.getClientById(clientId)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
     try {
-      const row = db.startClientBillingCycle(clientId, {
+      const row = await db.startClientBillingCycle(clientId, {
         started_at: body?.started_at,
         carry_in: body?.carry_in,
       })
@@ -456,10 +476,10 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const clientId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
-    const c = db.getClientById(clientId)
+    const c = await db.getClientById(clientId)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
     try {
-      const row = db.endClientBillingCycle(clientId, { ended_at: body?.ended_at })
+      const row = await db.endClientBillingCycle(clientId, { ended_at: body?.ended_at })
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e.message || 'تعذر إغلاق الدورة' })
@@ -469,50 +489,50 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const cycleId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(cycleId)) return send(res, 400, { message: 'معرف الدورة غير صالح' })
-    const result = db.getAccountStatementForCycle(cycleId)
+    const result = await db.getAccountStatementForCycle(cycleId)
     if (!result) return send(res, 404, { message: 'الدورة غير موجودة' })
     send(res, 200, result)
   },
   'GET /api/v1/clients/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const c = db.getClientById(id)
+    const c = await db.getClientById(id)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
     send(res, 200, req.auth.role === 'staff' ? sanitizeClientForStaff(c) : c)
   },
   'PATCH /api/v1/clients/:id': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const c = db.getClientById(id)
+    const c = await db.getClientById(id)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
     let patch = body
     if (req.auth.role === 'staff') {
       patch = { ...body }
       delete patch.initial_debt
     }
-    const row = db.updateClient(id, patch)
+    const row = await db.updateClient(id, patch)
     send(res, 200, req.auth.role === 'staff' ? sanitizeClientForStaff(row) : row)
   },
   'DELETE /api/v1/clients/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const c = db.getClientById(id)
+    const c = await db.getClientById(id)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
-    db.deleteClient(id)
+    await db.deleteClient(id)
     send(res, 204)
   },
   'GET /api/v1/clients/:id/balance': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const c = db.getClientById(id)
+    const c = await db.getClientById(id)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
-    const balance = db.getClientBalance(id)
-    send(res, 200, { balance })
+    const result = await db.getClientBalance(id)
+    send(res, 200, result)
   },
   'GET /api/v1/clients/:id/barns': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const clientId = parseInt(pathParts[1], 10)
-    const list = db.getBarnsByClientId(clientId)
+    const list = await db.getBarnsByClientId(clientId)
     if (req.auth.role === 'staff') {
       return send(res, 200, list.map((b) => sanitizeBarnForStaff(b)))
     }
@@ -521,14 +541,14 @@ const handlers = {
   'PATCH /api/v1/clients/:id/pin': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const row = db.toggleClientPin(id)
+    const row = await db.toggleClientPin(id)
     if (!row) return send(res, 404, { message: 'العميل غير موجود' })
     send(res, 200, row)
   },
   'PATCH /api/v1/clients/:id/favorite': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const row = db.toggleClientFavorite(id)
+    const row = await db.toggleClientFavorite(id)
     if (!row) return send(res, 404, { message: 'العميل غير موجود' })
     send(res, 200, row)
   },
@@ -537,10 +557,10 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const clientId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
-    const c = db.getClientById(clientId)
+    const c = await db.getClientById(clientId)
     if (!c) return send(res, 404, { message: 'العميل غير موجود' })
     try {
-      const row = db.createPayment({ ...body, client_id: clientId })
+      const row = await db.createPayment({ ...body, client_id: clientId })
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر تسجيل الدفعة' })
@@ -552,7 +572,7 @@ const handlers = {
     const clientId = parseInt(pathParts[1], 10)
     const payload = { ...body }
     if (req.auth.role === 'staff') payload.initial_debt = 0
-    const row = db.createBarn(clientId, payload)
+    const row = await db.createBarn(clientId, payload)
     send(res, 200, req.auth.role === 'staff' ? sanitizeBarnForStaff(row) : row)
   },
   'GET /api/v1/barns/:id/account-statement': async (req, res, _body, { pathParts, query }) => {
@@ -561,30 +581,39 @@ const handlers = {
     if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
     const from = query.from || undefined
     const to = query.to || undefined
-    const result = db.getAccountStatementBarn(barnId, from, to)
+    const result = await db.getAccountStatementBarn(barnId, from, to)
     if (process.env.NODE_ENV !== 'production') {
       console.log('[account-statement barn]', { barnId, from, to, rows: result.rows?.length })
     }
+    send(res, 200, result)
+  },
+  'GET /api/v1/barns/:id/statement': async (req, res, _body, { pathParts, query }) => {
+    if (!requireNotStaff(req, res)) return
+    const barnId = parseInt(pathParts[1], 10)
+    if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
+    const from = query.from || undefined
+    const to = query.to || undefined
+    const result = await db.getAccountStatementBarn(barnId, from, to)
     send(res, 200, result)
   },
   'GET /api/v1/barns/:id/billing-cycles': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const barnId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
-    const b = db.getBarnById(barnId)
+    const b = await db.getBarnById(barnId)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
-    const list = db.getBarnBillingCycles(barnId)
-    const open = db.getOpenBarnBillingCycle(barnId)
+    const list = await db.getBarnBillingCycles(barnId)
+    const open = await db.getOpenBarnBillingCycle(barnId)
     send(res, 200, { data: list, open_cycle_id: open?.id ?? null })
   },
   'POST /api/v1/barns/:id/billing-cycles/start': async (req, res, body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const barnId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
-    const b = db.getBarnById(barnId)
+    const b = await db.getBarnById(barnId)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
     try {
-      const row = db.startBarnBillingCycle(barnId, {
+      const row = await db.startBarnBillingCycle(barnId, {
         started_at: body?.started_at,
         carry_in: body?.carry_in,
       })
@@ -597,10 +626,10 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const barnId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
-    const b = db.getBarnById(barnId)
+    const b = await db.getBarnById(barnId)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
     try {
-      const row = db.endBarnBillingCycle(barnId, { ended_at: body?.ended_at })
+      const row = await db.endBarnBillingCycle(barnId, { ended_at: body?.ended_at })
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e.message || 'تعذر إغلاق الدورة' })
@@ -614,7 +643,7 @@ const handlers = {
     if (!Number.isFinite(cycleId)) {
       return send(res, 400, { message: 'معرف الدورة (cycle_id) مطلوب' })
     }
-    const result = db.getAccountStatementAfterBarnCycle(barnId, cycleId)
+    const result = await db.getAccountStatementAfterBarnCycle(barnId, cycleId)
     if (!result) {
       return send(res, 404, { message: 'الدورة غير موجودة أو لم تُغلق بعد' })
     }
@@ -624,70 +653,70 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const cycleId = parseInt(pathParts[1], 10)
     if (!Number.isFinite(cycleId)) return send(res, 400, { message: 'معرف الدورة غير صالح' })
-    const result = db.getAccountStatementForBarnCycle(cycleId)
+    const result = await db.getAccountStatementForBarnCycle(cycleId)
     if (!result) return send(res, 404, { message: 'الدورة غير موجودة' })
     send(res, 200, result)
   },
   'GET /api/v1/barns/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const b = db.getBarnById(id)
+    const b = await db.getBarnById(id)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
     send(res, 200, req.auth.role === 'staff' ? sanitizeBarnForStaff(b) : b)
   },
   'PATCH /api/v1/barns/:id': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const b = db.getBarnById(id)
+    const b = await db.getBarnById(id)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
     let patch = body
     if (req.auth.role === 'staff') {
       patch = { ...body }
       delete patch.initial_debt
     }
-    const row = db.updateBarn(id, patch)
+    const row = await db.updateBarn(id, patch)
     send(res, 200, req.auth.role === 'staff' ? sanitizeBarnForStaff(row) : row)
   },
   'DELETE /api/v1/barns/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const b = db.getBarnById(id)
+    const b = await db.getBarnById(id)
     if (!b) return send(res, 404, { message: 'العنبر غير موجود' })
-    db.deleteBarn(id)
+    await db.deleteBarn(id)
     send(res, 204)
   },
 
   'GET /api/v1/warehouses': async (req, res) => {
     if (!requireAuth(req, res)) return
-    send(res, 200, db.getWarehouses())
+    send(res, 200, await db.getWarehouses())
   },
   'GET /api/v1/warehouses/:id/stock-map': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const map = db.getWarehouseStockMap(id)
+    const map = await db.getWarehouseStockMap(id)
     send(res, 200, map)
   },
   'GET /api/v1/warehouses/:id/products-with-stock': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const list = db.getProductsInWarehouse(id)
+    const list = await db.getProductsInWarehouse(id)
     send(res, 200, list)
   },
   'GET /api/v1/warehouses/:id/batches': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const list = db.getBatchesByWarehouse(id)
+    const list = await db.getBatchesByWarehouse(id)
     send(res, 200, list)
   },
 
   'GET /api/v1/categories/options': async (req, res) => {
     if (!requireAuth(req, res)) return
-    const names = db.getCategoryOptions()
+    const names = await db.getCategoryOptions()
     send(res, 200, names)
   },
   'POST /api/v1/categories': async (req, res, body) => {
     if (!requireAuth(req, res)) return
-    const row = db.createCategory(body.name_ar)
+    const row = await db.createCategory(body.name_ar)
     send(res, 200, row)
   },
 
@@ -705,47 +734,63 @@ const handlers = {
     const lowStock = query.low_stock === 'true' || query.low_stock === '1'
     const unpriced = query.unpriced === 'true' || query.unpriced === '1'
     const expiring = query.expiring === 'true' || query.expiring === '1'
-    const list = db.getProducts(query.search, query.category, limit, offset, warehouseIdOk, lowStock, unpriced, expiring)
-    const total = db.getProductCountFiltered(query.search, query.category, warehouseIdOk, lowStock, unpriced, expiring)
+    const list = await db.getProducts(
+      query.search,
+      query.category,
+      limit,
+      offset,
+      warehouseIdOk,
+      lowStock,
+      unpriced,
+      expiring
+    )
+    const total = await db.getProductCountFiltered(
+      query.search,
+      query.category,
+      warehouseIdOk,
+      lowStock,
+      unpriced,
+      expiring
+    )
     send(res, 200, { data: list, total })
   },
   'POST /api/v1/products': async (req, res, body) => {
     if (!requireAuth(req, res)) return
-    const row = db.createProduct(body)
+    const row = await db.createProduct(body)
     send(res, 200, row)
   },
   'GET /api/v1/products/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const p = db.getProductById(id)
+    const p = await db.getProductById(id)
     if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
     send(res, 200, p)
   },
   'PATCH /api/v1/products/:id': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const p = db.getProductById(id)
+    const p = await db.getProductById(id)
     if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
-    const row = db.updateProduct(id, body)
+    const row = await db.updateProduct(id, body)
     send(res, 200, row)
   },
   'DELETE /api/v1/products/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const p = db.getProductById(id)
+    const p = await db.getProductById(id)
     if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
-    db.deleteProduct(id)
+    await db.deleteProduct(id)
     send(res, 204)
   },
   'GET /api/v1/products/by-barcode': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
-    const p = db.getProductByBarcode(query.barcode)
+    const p = await db.getProductByBarcode(query.barcode)
     send(res, 200, p || null)
   },
   'GET /api/v1/products/:id/stock': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const productId = parseInt(pathParts[1], 10)
-    const list = db.getProductStock(productId)
+    const list = await db.getProductStock(productId)
     send(res, 200, list)
   },
   'GET /api/v1/products/:id/batches': async (req, res, _body, { pathParts, query }) => {
@@ -753,14 +798,14 @@ const handlers = {
     const productId = parseInt(pathParts[1], 10)
     const warehouseId = query.warehouse_id ? parseInt(query.warehouse_id, 10) : null
     const includeEmpty = query.include_empty === '1' || query.include_empty === 'true'
-    const list = db.getBatchesForProduct(productId, warehouseId, { includeEmpty })
+    const list = await db.getBatchesForProduct(productId, warehouseId, { includeEmpty })
     send(res, 200, list)
   },
   'POST /api/v1/products/:id/batches': async (req, res, body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const productId = parseInt(pathParts[1], 10)
     try {
-      const row = db.createManualProductBatch(productId, body || {})
+      const row = await db.createManualProductBatch(productId, body || {})
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e.message || 'Bad request' })
@@ -770,7 +815,7 @@ const handlers = {
     if (!requireAuth(req, res)) return
     const productId = parseInt(pathParts[1], 10)
     try {
-      const row = db.seedInitialBulkStockForProductWithoutBatches(productId, body || {})
+      const row = await db.seedInitialBulkStockForProductWithoutBatches(productId, body || {})
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e.message || 'Bad request' })
@@ -779,7 +824,7 @@ const handlers = {
   'DELETE /api/v1/products/batches/:batchId': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const batchId = parseInt(pathParts[2], 10)
-    const result = db.deleteProductBatch(batchId, req.auth.role)
+    const result = await db.deleteProductBatch(batchId, req.auth.role)
     if (!result.ok) return send(res, 400, { message: result.error })
     send(res, 204)
   },
@@ -787,38 +832,77 @@ const handlers = {
     if (!requireAuth(req, res)) return
     const productId = parseInt(pathParts[1], 10)
     const warehouseId = query.warehouse_id ? parseInt(query.warehouse_id, 10) : null
-    const list = db.getBagsForProduct(productId, warehouseId)
+    const list = await db.getBagsForProduct(productId, warehouseId)
     send(res, 200, list)
   },
   'GET /api/v1/bag-instances/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const bagId = parseInt(pathParts[1], 10)
-    const row = db.getBagInstanceById(bagId)
+    const row = await db.getBagInstanceById(bagId)
     if (!row) return send(res, 404, { message: 'الشكارة غير موجودة' })
+    send(res, 200, row)
+  },
+  /** Single batch row (e.g. invoice scan when batch is omitted from warehouse list due to zero stock filter). */
+  'GET /api/v1/batches/:id': async (req, res, _body, { pathParts }) => {
+    if (!requireAuth(req, res)) return
+    const batchId = parseInt(pathParts[1], 10)
+    if (!Number.isFinite(batchId)) return send(res, 400, { message: 'معرف الدفعة غير صالح' })
+    const row = await db.getBatchById(batchId)
+    if (!row) return send(res, 404, { message: 'الدفعة غير موجودة' })
     send(res, 200, row)
   },
   'PATCH /api/v1/batches/:id': async (req, res, body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const batchId = parseInt(pathParts[1], 10)
     try {
-      const updated = db.updateProductBatch(batchId, body || {})
+      const updated = await db.updateProductBatch(batchId, body || {})
       if (!updated) return send(res, 404, { error: 'batch not found' })
       send(res, 200, updated)
     } catch (e) {
       send(res, 400, { message: e.message || 'Bad request' })
     }
   },
+  'POST /api/v1/inventory-transfers': async (req, res, body) => {
+    if (!requireAuth(req, res)) return
+    const fromWh = Number(body.from_warehouse_id)
+    const toWh = Number(body.to_warehouse_id)
+    if (!Number.isFinite(fromWh) || !Number.isFinite(toWh) || fromWh === toWh) {
+      return send(res, 400, { message: 'المخزن المصدر والهدف مطلوبان ويجب أن يكونا مختلفين' })
+    }
+    const items = Array.isArray(body.items) ? body.items : []
+    if (items.length === 0) {
+      return send(res, 400, { message: 'أضف صنفاً واحداً على الأقل' })
+    }
+    try {
+      await db.createInventoryTransfer({ from_warehouse_id: fromWh, to_warehouse_id: toWh, items, notes: body.notes })
+      send(res, 200, {
+        from_warehouse_id: fromWh,
+        to_warehouse_id: toWh,
+        notes: body.notes ?? null,
+        created_at: new Date().toISOString(),
+        items_count: items.length,
+      })
+    } catch (e) {
+      send(res, 400, { message: e?.message || 'تعذر تنفيذ التحويل' })
+    }
+  },
+  'GET /api/v1/inventory-transfers': async (req, res, _body, { query }) => {
+    if (!requireAuth(req, res)) return
+    const limit = Math.min(parseInt(query.limit, 10) || 50, 200)
+    const data = await db.getInventoryTransfers(limit)
+    send(res, 200, { data })
+  },
   'POST /api/v1/products/:id/stock-adjustment': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const productId = parseInt(pathParts[1], 10)
-    db.upsertProductStock(productId, body.warehouse_id, body.quantity_delta || 0)
+    await db.upsertProductStock(productId, body.warehouse_id, body.quantity_delta || 0)
     send(res, 204)
   },
 
   'GET /api/v1/suppliers': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 200)
-    const list = db.getSuppliers(query.search, limit)
+    const list = await db.getSuppliers(query.search, limit, query.sort || undefined)
     if (req.auth.role === 'staff') {
       const data = list.map(({ balance: _b, ...rest }) => rest)
       return send(res, 200, { data, total: data.length })
@@ -827,13 +911,13 @@ const handlers = {
   },
   'POST /api/v1/suppliers': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
-    const row = db.createSupplier(body)
+    const row = await db.createSupplier(body)
     send(res, 200, row)
   },
   'GET /api/v1/suppliers/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const s = db.getSupplierById(id)
+    const s = await db.getSupplierById(id)
     if (!s) return send(res, 404, { message: 'المورد غير موجود' })
     if (req.auth.role === 'staff') {
       const { balance: _b, ...rest } = s
@@ -844,74 +928,85 @@ const handlers = {
   'PATCH /api/v1/suppliers/:id': async (req, res, body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const s = db.getSupplierById(id)
+    const s = await db.getSupplierById(id)
     if (!s) return send(res, 404, { message: 'المورد غير موجود' })
-    const row = db.updateSupplier(id, body)
+    const row = await db.updateSupplier(id, body)
     send(res, 200, row)
   },
   'DELETE /api/v1/suppliers/:id': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const s = db.getSupplierById(id)
+    const s = await db.getSupplierById(id)
     if (!s) return send(res, 404, { message: 'المورد غير موجود' })
-    db.deleteSupplier(id)
+    await db.deleteSupplier(id)
     send(res, 204)
   },
   'GET /api/v1/suppliers/:id/balance': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const balance = db.getSupplierBalance(id)
+    const balance = await db.getSupplierBalance(id)
     send(res, 200, { balance })
   },
   'GET /api/v1/suppliers/:id/purchases': async (req, res, _body, { pathParts, query }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
     const limit = Math.min(parseInt(query.limit, 10) || 10, 100)
-    const list = db.getSupplierPurchases(id, limit)
+    const list = await db.getSupplierPurchases(id, limit)
     send(res, 200, { data: list, total: list.length })
   },
-  'GET /api/v1/suppliers/:id/purchases/with-items': async (req, res, _body, { pathParts, query }) => {
+  'GET /api/v1/suppliers/:id/purchases-with-items': async (req, res, _body, { pathParts, query }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
     const limit = Math.min(parseInt(query.limit, 10) || 10, 100)
-    const list = db.getSupplierPurchasesWithItems(id, limit)
+    const list = await db.getSupplierPurchasesWithItems(id, limit)
     send(res, 200, { data: list, total: list.length })
   },
   'GET /api/v1/suppliers/:id/payments': async (req, res, _body, { pathParts, query }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
     const limit = Math.min(parseInt(query.limit, 10) || 10, 100)
-    const list = db.getSupplierPayments(id, limit)
+    const list = await db.getSupplierPayments(id, limit)
     send(res, 200, { data: list, total: list.length })
   },
 
   'POST /api/v1/supplier-purchases': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
-    const row = db.createSupplierPurchase(body)
+    const row = await db.createSupplierPurchase(body)
     send(res, 200, row)
   },
   'GET /api/v1/supplier-purchases/:id': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const p = db.getSupplierPurchaseById(id)
+    const p = await db.getSupplierPurchaseById(id)
     if (!p) return send(res, 404, { message: 'الفاتورة غير موجودة' })
     send(res, 200, p)
   },
   'POST /api/v1/supplier-receipts': async (req, res, body) => {
     if (!requireAuth(req, res)) return
-    const row = db.createSupplierReceipt(body)
+    const row = await db.createSupplierReceipt(body)
     send(res, 200, [row])
   },
   'POST /api/v1/supplier-payments': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
-    const row = db.createSupplierPayment(body)
+    const row = await db.createSupplierPayment(body)
     send(res, 200, row)
   },
 
   'GET /api/v1/invoices': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 200)
-    const list = db.getInvoices(limit)
+    const unpaidOnly = query.unpaid === '1' || query.unpaid === 'true'
+    const warehouseId = query.warehouse_id != null && query.warehouse_id !== '' ? parseInt(query.warehouse_id, 10) : undefined
+    const list = await db.getInvoices({
+      limit,
+      payment_method: query.payment_method || undefined,
+      warehouse_id: Number.isFinite(warehouseId) ? warehouseId : undefined,
+      client_id: query.client_id ? parseInt(query.client_id, 10) : undefined,
+      barn_id: query.barn_id ? parseInt(query.barn_id, 10) : undefined,
+      from: query.from || undefined,
+      to: query.to || undefined,
+      unpaid_only: unpaidOnly,
+    })
     if (req.auth.role === 'staff') {
       const data = list.map((inv) => sanitizeInvoiceForStaff(inv))
       return send(res, 200, { data, total: data.length })
@@ -920,33 +1015,33 @@ const handlers = {
   },
   'POST /api/v1/invoices': async (req, res, body) => {
     if (!requireAuth(req, res)) return
-    const row = db.createInvoice(body)
+    const row = await db.createInvoice(body)
     send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(row) : row)
   },
   'GET /api/v1/invoices/:id': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const inv = db.getInvoiceById(id)
+    const inv = await db.getInvoiceById(id)
     if (!inv) return send(res, 404, { message: 'الفاتورة غير موجودة' })
-    const withMeta = attachInvoiceEditMeta(inv, req.auth.role)
+    const withMeta = await attachInvoiceEditMeta(inv, req.auth.role)
     send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
   },
   'PATCH /api/v1/invoices/:id': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const inv = db.getInvoiceById(id)
+    const inv = await db.getInvoiceById(id)
     if (!inv) return send(res, 404, { message: 'الفاتورة غير موجودة' })
     try {
       if (body && body.invoice_lifecycle === 'cancelled') {
         if (!requireNotStaff(req, res)) return
-        const row = db.cancelInvoice(id)
-        const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+        const row = await db.cancelInvoice(id)
+        const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
         send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
         return
       }
       if (body && Array.isArray(body.items)) {
         try {
-          db.assertInvoiceReplaceAllowed(id, req.auth.role)
+          await db.assertInvoiceReplaceAllowed(id, req.auth.role)
         } catch (e) {
           if (e.code === 'INVOICE_EDIT_WINDOW_EXPIRED') {
             return send(res, 403, {
@@ -962,11 +1057,11 @@ const handlers = {
           throw e
         }
         const { edit_override_reason: overrideReason, ...replaceBody } = body
-        const row = db.replaceInvoice(id, replaceBody)
-        const st = db.getInvoiceEditWindowStatus(id)
+        const row = await db.replaceInvoice(id, replaceBody)
+        const st = await db.getInvoiceEditWindowStatus(id)
         if (req.auth.role === 'super_admin' && st && !st.withinWindow) {
           const uid = parseInt(req.auth.sub, 10)
-          db.recordInvoiceEditOverride(
+          await db.recordInvoiceEditOverride(
             id,
             uid,
             overrideReason != null && String(overrideReason).trim() !== ''
@@ -974,12 +1069,12 @@ const handlers = {
               : 'super_admin_outside_edit_window'
           )
         }
-        const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+        const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
         send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
         return
       }
-      const row = db.updateInvoice(id, body)
-      const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+      const row = await db.updateInvoice(id, body)
+      const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
       send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر تحديث الفاتورة' })
@@ -990,8 +1085,8 @@ const handlers = {
     const invoiceId = parseInt(pathParts[1], 10)
     const itemId = parseInt(pathParts[3], 10)
     try {
-      const row = db.deleteInvoiceItem(invoiceId, itemId)
-      const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+      const row = await db.deleteInvoiceItem(invoiceId, itemId)
+      const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
       send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر إزالة الصنف' })
@@ -1003,8 +1098,8 @@ const handlers = {
     const itemId = parseInt(pathParts[3], 10)
     const returned = body?.returned_quantity ?? body?.quantity
     try {
-      const row = db.returnPartialInvoiceItem(invoiceId, itemId, returned, body?.notes ?? null)
-      const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+      const row = await db.returnPartialInvoiceItem(invoiceId, itemId, returned, body?.notes ?? null)
+      const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
       send(res, 200, req.auth.role === 'staff' ? sanitizeInvoiceForStaff(withMeta) : withMeta)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر تسجيل الإرجاع' })
@@ -1013,27 +1108,34 @@ const handlers = {
   'DELETE /api/v1/invoices/:id': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const inv = db.getInvoiceById(id)
+    const inv = await db.getInvoiceById(id)
     if (!inv) return send(res, 404, { message: 'الفاتورة غير موجودة' })
     try {
-      const row = db.cancelInvoice(id)
-      const withMeta = attachInvoiceEditMeta(row, req.auth.role)
+      const row = await db.cancelInvoice(id)
+      const withMeta = await attachInvoiceEditMeta(row, req.auth.role)
       send(res, 200, withMeta)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر إلغاء الفاتورة' })
     }
   },
 
+  'GET /api/v1/payments/:id': async (req, res, _body, { pathParts }) => {
+    if (!requireAuth(req, res)) return
+    const id = parseInt(pathParts[1], 10)
+    const row = await db.getPaymentById(id)
+    if (!row) return send(res, 404, { message: 'الدفعة غير موجودة' })
+    send(res, 200, row)
+  },
   'GET /api/v1/payments': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 200)
-    const list = db.getPayments(limit)
+    const list = await db.getPayments(limit)
     send(res, 200, { data: list, total: list.length })
   },
   'POST /api/v1/payments': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
     try {
-      const row = db.createPayment(body)
+      const row = await db.createPayment(body)
       send(res, 200, row)
     } catch (e) {
       send(res, 400, { message: e?.message || 'تعذر تسجيل الدفعة' })
@@ -1042,30 +1144,30 @@ const handlers = {
 
   'GET /api/v1/safe/balance': async (req, res) => {
     if (!requireNotStaff(req, res)) return
-    const balance = db.getSafeBalance()
+    const balance = await db.getSafeBalance()
     send(res, 200, { balance })
   },
   'GET /api/v1/safe/transactions': async (req, res, _body, { query }) => {
     if (!requireNotStaff(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 100)
-    const list = db.getSafeTransactions(limit)
+    const list = await db.getSafeTransactions(limit)
     send(res, 200, { data: list, total: list.length })
   },
   'POST /api/v1/safe/initial': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
-    db.createSafeInitial(body)
+    await db.createSafeInitial(body)
     send(res, 204)
   },
   'POST /api/v1/safe/adjustment': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
-    db.createSafeAdjustment(body)
+    await db.createSafeAdjustment(body)
     send(res, 204)
   },
   'DELETE /api/v1/safe/transactions/:id': async (req, res, _body, { pathParts }) => {
     if (!requireNotStaff(req, res)) return
     const id = parseInt(pathParts[2], 10)
     try {
-      const ok = db.deleteSafeTransaction(id)
+      const ok = await db.deleteSafeTransaction(id)
       if (!ok) return send(res, 404, { message: 'الحركة غير موجودة' })
       send(res, 204)
     } catch (e) {
@@ -1074,7 +1176,7 @@ const handlers = {
   },
   'POST /api/v1/safe/clear-history': async (req, res) => {
     if (!requireNotStaff(req, res)) return
-    const deleted = db.clearDeletableSafeTransactions()
+    const deleted = await db.clearDeletableSafeTransactions()
     send(res, 200, { deleted })
   },
 
@@ -1082,7 +1184,7 @@ const handlers = {
     if (!requireNotStaff(req, res)) return
     const from = query.from || undefined
     const to = query.to || undefined
-    const rows = db.getSalesByCategory(from, to)
+    const rows = await db.getSalesByCategory(from, to)
     send(res, 200, { data: rows, total: rows.length })
   },
   'GET /api/v1/reports/top-products': async (req, res, _body, { query }) => {
@@ -1093,7 +1195,7 @@ const handlers = {
     const whRaw = query.warehouse_id
     const warehouseId =
       whRaw != null && whRaw !== '' ? parseInt(String(whRaw), 10) : null
-    const rows = db.getTopProducts(
+    const rows = await db.getTopProducts(
       from,
       to,
       limit,
@@ -1107,10 +1209,10 @@ const handlers = {
     const to = query.to || undefined
     let rows
     if (from && to) {
-      rows = db.getDailyInvoiceTotalsForRange(from, to)
+      rows = await db.getDailyInvoiceTotalsForRange(from, to)
     } else {
       const days = Math.min(Math.max(parseInt(query.days, 10) || 30, 1), 90)
-      rows = db.getDailyInvoiceTotals(days)
+      rows = await db.getDailyInvoiceTotals(days)
     }
     send(res, 200, { data: rows, total: rows.length })
   },
@@ -1122,7 +1224,7 @@ const handlers = {
     if (!Number.isFinite(clientId)) return send(res, 400, { message: 'معرف العميل غير صالح' })
     const from = query.from || undefined
     const to = query.to || undefined
-    const result = db.getAccountStatementClient(clientId, from, to)
+    const result = await db.getAccountStatementClient(clientId, from, to)
     if (process.env.NODE_ENV !== 'production') {
       console.log('[account-statement client]', { clientId, from, to, rows: result.rows?.length })
     }
@@ -1135,7 +1237,7 @@ const handlers = {
     if (!Number.isFinite(barnId)) return send(res, 400, { message: 'معرف العنبر غير صالح' })
     const from = query.from || undefined
     const to = query.to || undefined
-    const result = db.getAccountStatementBarn(barnId, from, to)
+    const result = await db.getAccountStatementBarn(barnId, from, to)
     if (process.env.NODE_ENV !== 'production') {
       console.log('[account-statement barn]', { barnId, from, to, rows: result.rows?.length })
     }
@@ -1143,7 +1245,7 @@ const handlers = {
   },
   'GET /api/v1/settings': async (req, res) => {
     if (!requireNotStaff(req, res)) return
-    send(res, 200, db.getAllSettings())
+    send(res, 200, await db.getAllSettings())
   },
   'PATCH /api/v1/settings': async (req, res, body) => {
     if (!requireNotStaff(req, res)) return
@@ -1156,13 +1258,13 @@ const handlers = {
               message: 'مدة تعديل الفاتورة يجب أن تكون رقماً صحيحاً بين 1 و 365',
             })
           }
-          db.setSetting(k, String(n))
+          await db.setSetting(k, String(n))
         } else {
-          db.setSetting(k, v)
+          await db.setSetting(k, v)
         }
       }
     }
-    send(res, 200, db.getAllSettings())
+    send(res, 200, await db.getAllSettings())
   },
 }
 
@@ -1173,6 +1275,9 @@ function routeKey(method, path) {
   if (parts.length === 0) return `${method} ${base}`
   if (parts[0] === 'clients' && parts.length === 3 && parts[2] === 'account-statement') {
     return `${method} ${base}/clients/:id/account-statement`
+  }
+  if (parts[0] === 'clients' && parts.length === 3 && parts[2] === 'statement') {
+    return `${method} ${base}/clients/:id/statement`
   }
   if (parts[0] === 'clients' && parts.length === 3 && parts[2] === 'statement-after-cycle') {
     return `${method} ${base}/clients/:id/statement-after-cycle`
@@ -1213,6 +1318,9 @@ function routeKey(method, path) {
   if (parts[0] === 'barns' && parts.length === 3 && parts[2] === 'account-statement') {
     return `${method} ${base}/barns/:id/account-statement`
   }
+  if (parts[0] === 'barns' && parts.length === 3 && parts[2] === 'statement') {
+    return `${method} ${base}/barns/:id/statement`
+  }
   if (parts[0] === 'settings') return `${method} ${base}/settings`
   if (parts[0] === 'bag-instances' && parts[1]) return `${method} ${base}/bag-instances/:id`
   if (parts[0] === 'batches' && parts[1]) return `${method} ${base}/batches/:id`
@@ -1246,13 +1354,16 @@ function routeKey(method, path) {
   }
   if (parts[0] === 'suppliers' && parts.length >= 2) {
     if (parts[2] === 'balance') return `${method} ${base}/suppliers/:id/balance`
-    if (parts[2] === 'purchases' && parts[3] === 'with-items') return `${method} ${base}/suppliers/:id/purchases/with-items`
+    if ((parts[2] === 'purchases' && parts[3] === 'with-items') || parts[2] === 'purchases-with-items') {
+      return `${method} ${base}/suppliers/:id/purchases-with-items`
+    }
     if (parts[2] === 'purchases') return `${method} ${base}/suppliers/:id/purchases`
     if (parts[2] === 'payments') return `${method} ${base}/suppliers/:id/payments`
     return `${method} ${base}/suppliers/:id`
   }
   if (parts[0] === 'suppliers') return `${method} ${base}/suppliers`
   if (parts[0] === 'supplier-purchases' && parts[1]) return `${method} ${base}/supplier-purchases/:id`
+  if (parts[0] === 'inventory-transfers') return `${method} ${base}/inventory-transfers`
   if (parts[0] === 'invoices' && parts.length === 5 && parts[2] === 'items' && parts[4] === 'return') {
     return `${method} ${base}/invoices/:id/items/:itemId/return`
   }
@@ -1261,6 +1372,7 @@ function routeKey(method, path) {
   }
   if (parts[0] === 'invoices' && parts[1]) return `${method} ${base}/invoices/:id`
   if (parts[0] === 'invoices') return `${method} ${base}/invoices`
+  if (parts[0] === 'payments' && parts[1]) return `${method} ${base}/payments/:id`
   if (parts[0] === 'payments') return `${method} ${base}/payments`
   if (parts[0] === 'safe') {
     if (parts[1] === 'clear-history') return `${method} ${base}/safe/clear-history`
@@ -1318,6 +1430,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`API listening on http://localhost:${PORT}`)
-  console.log(`SQLite: ${db.dbPath} (migrations in server/migrations/)`)
+  console.log(`Database: ${db.dbPath}`)
   console.log('Auth: users in DB; first visit /login creates super_admin if no users exist')
 })

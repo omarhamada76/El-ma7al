@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Modal from './Modal'
+import { formatCurrency } from '@/lib/utils'
 
 interface SafeSetBalanceModalProps {
   open: boolean
@@ -55,9 +56,7 @@ export default function SafeSetBalanceModal({
         )}
         <p className="text-sm text-gray-600 dark:text-gray-400">
           الرصيد الحالي:{' '}
-          <span className="font-semibold">
-            {currentBalance.toLocaleString('ar-EG')} ج.م
-          </span>
+          <span className="font-semibold">{formatCurrency(currentBalance)}</span>
         </p>
         <div>
           <label className="block text-sm font-medium mb-1">الرصيد الجديد (ج.م) *</label>

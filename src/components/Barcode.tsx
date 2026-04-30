@@ -11,6 +11,7 @@ export interface BarcodeProps {
   fontSize?: number
   displayValue?: boolean
   className?: string
+  style?: React.CSSProperties
 }
 
 export default function Barcode({
@@ -20,6 +21,7 @@ export default function Barcode({
   fontSize = 10,
   displayValue = true,
   className,
+  style,
 }: BarcodeProps) {
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -43,5 +45,13 @@ export default function Barcode({
     }
   }, [value, width, height, fontSize, displayValue])
 
-  return <svg ref={svgRef} className={className} role="img" aria-label={`Barcode ${value}`} />
+  return (
+    <svg
+      ref={svgRef}
+      className={className}
+      style={style}
+      role="img"
+      aria-label={`Barcode ${value}`}
+    />
+  )
 }

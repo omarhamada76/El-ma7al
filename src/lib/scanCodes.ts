@@ -12,6 +12,30 @@ export type ParsedScan =
       expiryDate: string | null
     }
 
+/** Remove invisible / direction marks often inserted by scanners or PDF paste. */
+function stripInvisible(s: string): string {
+  return s.replace(/[\u200B-\u200D\uFEFF\u202A-\u202E]/g, '')
+}
+
+/** When the string is not exactly `B123` (prefix/suffix), pick longest B… or G… token. */
+function extractLongestBatchOrBagToken(t: string): ParsedScan | null {
+  const b = [...t.matchAll(/B(\d+)/gi)].map((m) => ({
+    kind: 'batch' as const,
+    id: parseInt(m[1], 10),
+    len: `B${m[1]}`.length,
+  }))
+  const g = [...t.matchAll(/G(\d+)/gi)].map((m) => ({
+    kind: 'bag' as const,
+    id: parseInt(m[1], 10),
+    len: `G${m[1]}`.length,
+  }))
+  const all = [...b, ...g]
+  if (all.length === 0) return null
+  const best = all.reduce((a, x) => (x.len > a.len ? x : a))
+  if (best.kind === 'batch') return { kind: 'batch', batchId: best.id }
+  return { kind: 'bag', bagInstanceId: best.id }
+}
+
 /** Batch label / invoice scan: `B7` → batch id 7 */
 export function getBatchBarcodeValue(batchId: number): string {
   return `B${batchId}`
@@ -37,7 +61,7 @@ export function isExpiryWithinDays(expiryDate: string | null | undefined, days: 
 }
 
 export function parseScannedBarcode(raw: string): ParsedScan {
-  const s = (raw || '').trim()
+  const s = stripInvisible((raw || '').trim())
   if (!s) {
     return { kind: 'product', code: '', unitPrice: null, productName: null, batchId: null, expiryDate: null }
   }
@@ -47,9 +71,21 @@ export function parseScannedBarcode(raw: string): ParsedScan {
     return { kind: 'batch', batchId: parseInt(batchM[1], 10) }
   }
 
+  // Treat pure 4 to 6 digit numbers as manual batch short codes (e.g. "0124" -> 124)
+  const numericBatchM = /^\d{4,6}$/.exec(s)
+  if (numericBatchM) {
+    return { kind: 'batch', batchId: parseInt(numericBatchM[0], 10) }
+  }
+
   const bagM = /^G(\d+)$/i.exec(s)
   if (bagM) {
     return { kind: 'bag', bagInstanceId: parseInt(bagM[1], 10) }
+  }
+
+  // Prefix/suffix junk (no pipe composite): e.g. "]C1B47" or "scanB47end"
+  if (!s.includes('|') && !s.includes(SCAN_SEP)) {
+    const loose = extractLongestBatchOrBagToken(s)
+    if (loose) return loose
   }
 
   const useDouble = s.includes(SCAN_SEP)

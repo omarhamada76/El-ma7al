@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import Modal from './Modal'
+import ProductImageField from './ProductImageField'
 import type { InitialBatchEntry } from '@/api/products'
 import InitialProductBatchesEditor, {
   type InitialBatchUiRow,
@@ -10,21 +11,25 @@ import InitialProductBatchesEditor, {
 const ADD_PRODUCT_WAREHOUSE_KEY = 'vet-pharmacy-add-product-warehouse'
 
 function getStoredWarehouseId(): number | undefined {
-  if (typeof window === 'undefined') return undefined
-  try {
-    const s = localStorage.getItem(ADD_PRODUCT_WAREHOUSE_KEY)
-    if (s == null || s === '') return undefined
-    const n = Number(s)
-    return Number.isInteger(n) ? n : undefined
-  } catch {
-    return undefined
-  }
+  return 1
 }
 
 function setStoredWarehouseId(id: number) {
   try {
     localStorage.setItem(ADD_PRODUCT_WAREHOUSE_KEY, String(id))
   } catch {}
+}
+
+/** First UI row (in order) with both buy and sell prices entered; used to mirror default product prices. */
+function firstBatchRowWithBothPrices(rows: InitialBatchUiRow[]): InitialBatchUiRow | null {
+  for (const r of rows) {
+    const pp = r.purchase_price === '' ? NaN : Number(r.purchase_price)
+    const sp = r.selling_price === '' ? NaN : Number(r.selling_price)
+    if (Number.isFinite(pp) && pp >= 0 && Number.isFinite(sp) && sp >= 0) {
+      return r
+    }
+  }
+  return null
 }
 
 export type WarehouseOption = { id: number; name_ar: string }
@@ -50,6 +55,8 @@ export type ProductFormData = {
   unit_type?: 'piece' | 'bulk'
   bag_weight_kg?: number | null
   notes: string
+  /** JPEG data URL or external URL; persisted as `products.image_url`. */
+  image_url?: string | null
   warehouse_id?: number
   /** Optional opening stock: one row per physical batch on shelf */
   initial_batches?: InitialBatchEntry[]
@@ -69,13 +76,16 @@ interface AddProductModalProps {
 
 const OTHER_CATEGORY = '__other__'
 
+/** Default low-stock threshold (pieces) for new inventory products. */
+const DEFAULT_PIECE_ALERT_LEVEL = 5
+
 const defaultForm: ProductFormData = {
   name: '',
   company: '',
   category: '',
   purchase_price: 0,
   selling_price: 0,
-  alert_level: 0,
+  alert_level: DEFAULT_PIECE_ALERT_LEVEL,
   barcode: '',
   unit_type: 'piece',
   bag_weight_kg: null,
@@ -106,7 +116,7 @@ export default function AddProductModal({
   )
   const [purchase_price, setPurchasePrice] = useState<number | ''>('')
   const [selling_price, setSellingPrice] = useState<number | ''>('')
-  const [alert_level, setAlertLevel] = useState<number | ''>('')
+  const [alert_level, setAlertLevel] = useState<number | ''>(DEFAULT_PIECE_ALERT_LEVEL)
   const [alert_level_kg, setAlertLevelKg] = useState<number | ''>('')
   const [barcode, setBarcode] = useState('')
   const [unit_type, setUnitType] = useState<'piece' | 'bulk'>('piece')
@@ -114,6 +124,7 @@ export default function AddProductModal({
   const [initialBatchRows, setInitialBatchRows] = useState<InitialBatchUiRow[]>([])
   const createModalOpenRef = useRef(false)
   const [notes, setNotes] = useState('')
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const errorBannerRef = useRef<HTMLDivElement>(null)
@@ -141,6 +152,7 @@ export default function AddProductModal({
       setUnitType(initialValues.unit_type ?? 'piece')
       setBagWeightKg(initialValues.bag_weight_kg ?? '')
       setNotes(initialValues.notes ?? '')
+      setImageUrl(initialValues.image_url ?? null)
     } else {
       setName('')
       setCompany('')
@@ -148,12 +160,13 @@ export default function AddProductModal({
       setCategoryOther('')
       setPurchasePrice('')
       setSellingPrice('')
-      setAlertLevel('')
+      setAlertLevel(DEFAULT_PIECE_ALERT_LEVEL)
       setAlertLevelKg('')
       setBarcode('')
       setUnitType('piece')
       setBagWeightKg('')
       setNotes('')
+      setImageUrl(null)
     }
     setBarcodeSaveWarning('')
   }, [open, initialValues, categoryOptions])
@@ -194,14 +207,24 @@ export default function AddProductModal({
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [error])
 
+  useEffect(() => {
+    if (!open || isEdit) return
+    const src = firstBatchRowWithBothPrices(initialBatchRows)
+    if (!src) return
+    const pp = src.purchase_price === '' ? NaN : Number(src.purchase_price)
+    const sp = src.selling_price === '' ? NaN : Number(src.selling_price)
+    if (purchase_price === '' && Number.isFinite(pp)) {
+      setPurchasePrice(pp)
+    }
+    if (selling_price === '' && Number.isFinite(sp)) {
+      setSellingPrice(sp)
+    }
+  }, [open, isEdit, initialBatchRows, purchase_price, selling_price])
+
   const handleWarehouseChange = (id: number | '') => {
     setWarehouseId(id)
     if (typeof id === 'number') setStoredWarehouseId(id)
   }
-
-  /** Hide duplicate product-level prices when user is entering per-batch prices. */
-  const hideStandaloneProductPrices =
-    !isEdit && warehouseOptions.length > 0 && initialBatchRows.length > 0
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -276,9 +299,10 @@ export default function AddProductModal({
     }
 
     const bcTrim = barcode.trim()
-    if (!bcTrim || bcTrim.startsWith('PRD-')) {
+    // Empty barcode is OK — server assigns PRD-… for internal use; only warn if user typed PRD- manually (unusual).
+    if (bcTrim.startsWith('PRD-')) {
       setBarcodeSaveWarning(
-        'No physical barcode set — scanner lookups will fail for this product'
+        'باركود PRD- داخلي فقط — لمسح بضائع المورّد أضف الباركود المطبوع على العبوة من «تعديل المنتج» لاحقاً.'
       )
     } else {
       setBarcodeSaveWarning('')
@@ -293,7 +317,11 @@ export default function AddProductModal({
         purchase_price: effectivePurchase,
         selling_price: effectiveSelling,
         alert_level:
-          unit_type === 'bulk' ? 0 : alert_level === '' ? 0 : Number(alert_level),
+          unit_type === 'bulk'
+            ? 0
+            : alert_level === ''
+              ? DEFAULT_PIECE_ALERT_LEVEL
+              : Number(alert_level),
         alert_level_kg:
           unit_type === 'bulk'
             ? alert_level_kg !== '' && alert_level_kg != null
@@ -304,6 +332,7 @@ export default function AddProductModal({
         unit_type,
         bag_weight_kg: bag_weight_kg === '' ? null : Number(bag_weight_kg),
         notes: notes.trim() || '',
+        image_url: imageUrl,
         ...(!isEdit ? { initial_batches: initialBatchesPayload } : {}),
         ...(warehouseOptions.length > 0 && whId != null && Number.isInteger(whId) ? { warehouse_id: whId } : {}),
       })
@@ -314,13 +343,14 @@ export default function AddProductModal({
         setCategoryOther('')
         setPurchasePrice('')
         setSellingPrice('')
-        setAlertLevel('')
+        setAlertLevel(DEFAULT_PIECE_ALERT_LEVEL)
         setAlertLevelKg('')
         setInitialBatchRows([])
         setBarcode('')
         setUnitType('piece')
         setBagWeightKg('')
         setNotes('')
+        setImageUrl(null)
       }
       onClose()
     } catch (err) {
@@ -364,6 +394,12 @@ export default function AddProductModal({
             className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
           />
         </div>
+        <ProductImageField
+          imageUrl={imageUrl}
+          onImageUrlChange={setImageUrl}
+          onError={setError}
+          hint="اختياري — تُعرض في قائمة المخزون بجانب الاسم."
+        />
         <div>
           <label className="block text-sm font-medium mb-1">الفئة</label>
           {categoryOptions.length > 0 ? (
@@ -473,43 +509,42 @@ export default function AddProductModal({
               onRowsChange={setInitialBatchRows}
             />
           )}
-          {hideStandaloneProductPrices && (
+          {!isEdit && warehouseOptions.length > 0 && initialBatchRows.length > 0 && (
             <p className="text-xs text-gray-600 dark:text-gray-400">
-              أسعار المنتج في القائمة تُستمد من الدفعة الأولى. لإدخال سعر عام بدون دفعات، احذف كل صفوف
-              الدفعات أعلاه.
+              عند وجود دفعات ابتدائية، يُحفظ سعر الشراء وسعر البيع للمنتج من الدفعة الأولى في الطلب.
+              إذا تركت الحقلين أدناه فارغين، يُملآن تلقائياً من أول دفعة تُدخل فيها السعرين. لإدخال سعر
+              عام فقط بدون دفعات، احذف كل صفوف الدفعات أعلاه.
             </p>
           )}
         </div>
-        {!hideStandaloneProductPrices && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
-              <input
-                type="number"
-                min={0}
-                step={0.01}
-                value={purchase_price === '' ? '' : purchase_price}
-                onChange={(e) =>
-                  setPurchasePrice(e.target.value === '' ? '' : Number(e.target.value))
-                }
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">سعر البيع (ج.م)</label>
-              <input
-                type="number"
-                min={0}
-                step={0.01}
-                value={selling_price === '' ? '' : selling_price}
-                onChange={(e) =>
-                  setSellingPrice(e.target.value === '' ? '' : Number(e.target.value))
-                }
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={purchase_price === '' ? '' : purchase_price}
+              onChange={(e) =>
+                setPurchasePrice(e.target.value === '' ? '' : Number(e.target.value))
+              }
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+            />
           </div>
-        )}
+          <div>
+            <label className="block text-sm font-medium mb-1">سعر البيع (ج.م)</label>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={selling_price === '' ? '' : selling_price}
+              onChange={(e) =>
+                setSellingPrice(e.target.value === '' ? '' : Number(e.target.value))
+              }
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+            />
+          </div>
+        </div>
         {unit_type === 'bulk' ? (
           <div>
             <label className="block text-sm font-medium mb-1">مستوى التنبيه (كيلو)</label>

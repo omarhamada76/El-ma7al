@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { Client, Barn } from '@/types/api'
+import type { Client, Barn, ClientBalance } from '@/types/api'
 
 export interface ClientsParams {
   page?: number
@@ -29,7 +29,7 @@ export async function getClient(id: string): Promise<Client> {
   return api.get(`/clients/${id}`)
 }
 
-export async function getClientBalance(id: string): Promise<{ balance: number }> {
+export async function getClientBalance(id: string): Promise<ClientBalance> {
   return api.get(`/clients/${id}/balance`)
 }
 

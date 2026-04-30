@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, CreditCard, Pencil, Trash2 } from 'lucide-react'
@@ -140,34 +140,72 @@ export default function SupplierDetail() {
                 لا توجد فواتير شراء
               </p>
             ) : (
-              <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-                {purchases.map((p) => (
-                  <li key={p.id} className="p-4">
-                    <div className="flex justify-between text-sm mb-2">
-                      <span>{formatDate(p.created_at)}</span>
-                      <span className="font-medium">{formatCurrency(p.total_amount)}</span>
-                    </div>
-                    {p.items?.length ? (
-                      <ul className="mr-4 space-y-1 text-sm text-gray-600 dark:text-gray-400">
-                        {p.items.map((item) => (
-                          <li key={item.id}>
-                            {item.product_name || 'منتج'}: <strong>{item.quantity}</strong>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-right">
+                  <thead className="text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 uppercase">
+                    <tr>
+                      <th className="px-4 py-3 font-medium text-gray-900 dark:text-white">التاريخ</th>
+                      <th className="px-4 py-3 font-medium text-gray-900 dark:text-white text-center">الأصناف</th>
+                      <th className="px-4 py-3 font-medium text-gray-900 dark:text-white text-left">الإجمالي</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {purchases.map((p) => (
+                      <React.Fragment key={p.id}>
+                        <tr className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                          <td className="px-4 py-3">
+                            <span className="block font-medium">{formatDate(p.created_at)}</span>
+                            <span className="text-xs text-gray-500">#{p.id}</span>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                              {p.items?.length || 0} أصناف
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-left font-bold text-gray-900 dark:text-white">
+                            {formatCurrency(p.total_amount)}
+                          </td>
+                        </tr>
+                        {p.items?.length ? (
+                          <tr className="bg-gray-50/50 dark:bg-gray-900/20">
+                            <td colSpan={3} className="px-4 py-3">
+                              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wider">
+                                تفاصيل الأصناف الملبمة:
+                              </div>
+                              <div className="space-y-2">
+                                {p.items.map((item) => (
+                                  <div key={item.id} className="flex justify-between items-center text-sm border-b border-gray-100 dark:border-gray-800 pb-1 last:border-0 last:pb-0">
+                                    <span className="text-gray-700 dark:text-gray-300">
+                                      {item.product_name}
+                                    </span>
+                                    <div className="flex gap-4">
+                                      <span className="text-gray-500">
+                                        السعر: <strong>{formatCurrency(item.unit_price)}</strong>
+                                      </span>
+                                      <span className="font-bold text-primary-600 dark:text-primary-400">
+                                        الكمية: {item.quantity}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>
         <div>
-          <h2 className="text-lg font-semibold mb-3">آخر المدفوعات (السدادات)</h2>
+          <h2 className="text-lg font-semibold mb-3">آخر السداد</h2>
           <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">
             {payments.length === 0 ? (
               <p className="p-4 text-center text-gray-500 dark:text-gray-400 text-sm">
-                لا توجد مدفوعات
+                لا يوجد سداد مسجّل
               </p>
             ) : (
               <ul className="divide-y divide-gray-200 dark:divide-gray-700">

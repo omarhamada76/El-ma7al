@@ -34,6 +34,23 @@ export default function Settings() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['app-settings'] }),
   })
 
+  const resetTestData = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; deleted_rows: number }>('/settings/reset-test-data', {}),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['clients'] }),
+        queryClient.invalidateQueries({ queryKey: ['client'] }),
+        queryClient.invalidateQueries({ queryKey: ['barns'] }),
+        queryClient.invalidateQueries({ queryKey: ['invoices'] }),
+        queryClient.invalidateQueries({ queryKey: ['payments'] }),
+        queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
+        queryClient.invalidateQueries({ queryKey: ['safe'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['reports'] }),
+      ])
+    },
+  })
+
   function toggleDark() {
     document.documentElement.classList.toggle('dark', !dark)
     setDark(!dark)
@@ -181,6 +198,36 @@ export default function Settings() {
         >
           تسجيل الخروج
         </a>
+      </section>
+
+      <section className="rounded-xl border border-red-200 dark:border-red-800 bg-white dark:bg-gray-800 p-6">
+        <h2 className="text-lg font-semibold mb-2 text-red-700 dark:text-red-400">تنظيف بيانات الاختبار</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          يمسح بيانات التشغيل الاختبارية (عملاء/فواتير/سداد/موردين/خزنة...) مع الإبقاء على بيانات المخزون كما هي.
+        </p>
+        <button
+          type="button"
+          disabled={resetTestData.isPending}
+          onClick={() => {
+            const ok = window.confirm(
+              'سيتم حذف بيانات الاختبار مع الإبقاء على المخزون. هل أنت متأكد؟',
+            )
+            if (!ok) return
+            resetTestData.mutate()
+          }}
+          className="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 font-medium text-sm disabled:opacity-50"
+        >
+          {resetTestData.isPending ? 'جاري المسح...' : 'حذف بيانات الاختبار'}
+        </button>
+        {resetTestData.isSuccess && (
+          <p className="text-sm text-green-600 mt-2">تم الحذف بنجاح</p>
+        )}
+        {resetTestData.isError && (
+          <p className="text-sm text-red-600 mt-2">
+            {resetTestData.error?.message || 'فشل الحذف — تأكد من صلاحية مدير النظام'}
+          </p>
+        )}
+
       </section>
     </div>
   )

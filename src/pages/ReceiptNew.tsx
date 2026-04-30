@@ -10,11 +10,13 @@ import {
   createSupplierReceiptWithDistribution,
   type CreateSupplierReceiptBody,
 } from '@/api/supplierPurchases'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddProductModal from '@/components/AddProductModal'
 import AddReceiptLineModal from '@/components/AddReceiptLineModal'
 import AddSupplierModal from '@/components/AddSupplierModal'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
 import type { Product, ProductBatch } from '@/types/api'
 
 function defaultExpiryDate(): string {
@@ -28,6 +30,8 @@ interface ReceiptRow {
   product_name: string
   quantity: number
   unit_price: number
+  /** سعر البيع للدفعة الجديدة؛ إن وُجد يُستخدم بدل حساب الهامش الافتراضي */
+  selling_price?: number
   total_price: number
   expiry_date: string
   unit_type?: 'piece' | 'bulk'
@@ -49,6 +53,12 @@ export default function ReceiptNew() {
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<ReceiptRow[]>([])
   const [error, setError] = useState('')
+  const [celebrate, setCelebrate] = useState<{
+    title: string
+    subtitle?: string
+    durationMs?: number
+    then?: () => void
+  } | null>(null)
   const [addProductOpen, setAddProductOpen] = useState(false)
   const [addLineOpen, setAddLineOpen] = useState(false)
   const [addSupplierOpen, setAddSupplierOpen] = useState(false)
@@ -104,10 +114,15 @@ export default function ReceiptNew() {
       queryClient.invalidateQueries({ queryKey: ['warehouse-batches'] })
       queryClient.invalidateQueries({ queryKey: ['product'] })
       queryClient.invalidateQueries({ queryKey: ['receipt-batches'] })
-      navigate('/inventory?unpriced=1')
+      setCelebrate({
+        title: 'تم تسجيل استلام المورد بنجاح',
+        subtitle: 'جاري التوجيه…',
+        durationMs: 1700,
+        then: () => navigate('/inventory?unpriced=1'),
+      })
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'فشل تسجيل الاستلام')
+      setError(err instanceof Error ? err.message : 'تعذر تسجيل الاستلام')
     },
   })
 
@@ -117,6 +132,11 @@ export default function ReceiptNew() {
       queryClient.invalidateQueries({ queryKey: ['suppliers', 'list'] })
       setSupplierId(String(newSupplier.id))
       setAddSupplierOpen(false)
+      setCelebrate({
+        title: 'تم إضافة المورد بنجاح',
+        subtitle: 'تم اختياره في الاستلام',
+        durationMs: 1400,
+      })
     },
   })
 
@@ -138,11 +158,20 @@ export default function ReceiptNew() {
           product_name: newProduct.name,
           quantity: 1,
           unit_price: newProduct.purchase_price,
+          selling_price:
+            newProduct.selling_price != null && newProduct.selling_price > 0
+              ? newProduct.selling_price
+              : undefined,
           total_price: newProduct.purchase_price,
           expiry_date: defaultExpiryDate(),
           distribution: dist,
         },
       ])
+      setCelebrate({
+        title: 'تم إضافة المنتج بنجاح',
+        subtitle: 'تمت إضافته كسطر في الاستلام',
+        durationMs: 1400,
+      })
     },
   })
 
@@ -189,6 +218,8 @@ export default function ReceiptNew() {
       product_name: product.name,
       quantity: q,
       unit_price: product.purchase_price,
+      selling_price:
+        product.selling_price != null && product.selling_price > 0 ? product.selling_price : undefined,
       total_price: 0,
       expiry_date: expiryDate,
       unit_type: product.unit_type,
@@ -209,6 +240,8 @@ export default function ReceiptNew() {
         product_name: product.name,
         quantity: sum || 1,
         unit_price: product.purchase_price,
+        selling_price:
+          product.selling_price != null && product.selling_price > 0 ? product.selling_price : undefined,
         total_price: 0,
         expiry_date: row.expiry_date,
         unit_type: product.unit_type,
@@ -250,6 +283,17 @@ export default function ReceiptNew() {
       }
       updated.total_price = receiptLineTotal(updated)
       next[index] = updated
+      return next
+    })
+  }
+
+  const setSellingPrice = (index: number, value: number | undefined) => {
+    setItems((prev) => {
+      const next = [...prev]
+      next[index] = {
+        ...next[index],
+        selling_price: value,
+      }
       return next
     })
   }
@@ -310,6 +354,7 @@ export default function ReceiptNew() {
         product_id: i.product_id,
         quantity: i.quantity,
         unit_price: i.unit_price,
+        ...(i.selling_price != null && i.selling_price > 0 ? { selling_price: i.selling_price } : {}),
         expiry_date: i.expiry_date,
         unit_type: i.unit_type,
         kg_per_bag: i.kg_per_bag,
@@ -319,17 +364,26 @@ export default function ReceiptNew() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl w-full min-w-0 overflow-x-hidden" dir="rtl">
+    <div className="space-y-6 w-full max-w-7xl min-w-0" dir="rtl">
+      <SuccessOverlay
+        open={!!celebrate}
+        title={celebrate?.title ?? ''}
+        subtitle={celebrate?.subtitle}
+        durationMs={celebrate?.durationMs ?? 1650}
+        onComplete={() => {
+          const next = celebrate?.then
+          setCelebrate(null)
+          next?.()
+        }}
+      />
       <h1 className="text-xl sm:text-2xl font-bold">استلام البضاعة</h1>
       <p className="text-sm text-gray-500 dark:text-gray-400 break-words">
-        اختر المورد (الشركة)، أضف الأصناف المستلمة (المنتج، الكمية، سعر الفاتورة). من المبلغ الإجمالي تزيد مديونية المورد. ثم وزّع كل صنف على المخازن (اجهور / شبرا) لزيادة المخزون عندهم.
+        اختر المورد (الشركة)، أضف الأصناف المستلمة (المنتج، الكمية، سعر الشراء، واختياريًا سعر البيع للدفعة). من المبلغ الإجمالي تزيد مديونية المورد. إن تركت «سعر البيع» فارغًا يُحسب من هامش البيع الافتراضي في الإعدادات. ثم وزّع كل صنف على المخازن لزيادة المخزون.
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-6 min-w-0">
         {error && (
-          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
-            {error}
-          </div>
+          <FeedbackBanner type="error" message={error} />
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
@@ -418,6 +472,7 @@ export default function ReceiptNew() {
                 alert_level_kg: d.alert_level_kg ?? null,
                 barcode: d.barcode || null,
                 notes: d.notes || null,
+                image_url: d.image_url ?? null,
                 unit_type: d.unit_type,
                 bag_weight_kg: d.bag_weight_kg ?? null,
                 initial_batches: d.initial_batches ?? [],
@@ -425,17 +480,19 @@ export default function ReceiptNew() {
               })
             }}
           />
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-x-auto min-w-0 w-full max-w-full">
-            <table className="w-full text-sm min-w-[700px]">
+          <div className="responsive-table-container">
+            {/* Desktop View: Table — min width on product col so search + dropdown stay usable */}
+            <table className="hidden sm:table w-full min-w-[56rem] text-sm">
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-right py-2 px-3">المنتج</th>
-                  <th className="text-right py-2 px-3 w-32">تاريخ الصلاحية</th>
-                  <th className="text-right py-2 px-3 w-24">الكمية</th>
-                  <th className="text-right py-2 px-3 w-28">سعر الوحدة</th>
-                  <th className="text-right py-2 px-3 w-28">الإجمالي</th>
+                  <th className="text-right py-3 px-3 min-w-[16rem] w-[26%] align-top">المنتج</th>
+                  <th className="text-right py-3 px-3 w-32">تاريخ الصلاحية</th>
+                  <th className="text-right py-3 px-3 w-24">الكمية</th>
+                  <th className="text-right py-3 px-3 w-28">سعر الوحدة (شراء)</th>
+                  <th className="text-right py-3 px-3 w-28">سعر البيع</th>
+                  <th className="text-right py-3 px-3 w-28">الإجمالي</th>
                   {sortedWarehouses.map((w) => (
-                    <th key={w.id} className="text-right py-2 px-3 w-24">توزيع: {w.name_ar}</th>
+                    <th key={w.id} className="text-right py-3 px-3 w-24 whitespace-nowrap">توزيع: {w.name_ar}</th>
                   ))}
                   <th className="w-10" />
                 </tr>
@@ -449,8 +506,8 @@ export default function ReceiptNew() {
                     : products
                   return (
                   <tr key={index} className="border-b border-gray-100 dark:border-gray-700">
-                    <td className="py-1.5 px-3 relative">
-                      <div ref={isSearchOpen ? productSearchRef : null} className="relative">
+                    <td className="py-1.5 px-3 relative min-w-[16rem] w-[26%] align-top">
+                      <div ref={isSearchOpen ? productSearchRef : null} className="relative z-20 min-w-[14rem]">
                         <input
                           type="text"
                           value={isSearchOpen ? productSearchQuery : row.product_name}
@@ -469,7 +526,7 @@ export default function ReceiptNew() {
                           )}
                         />
                         {isSearchOpen && (
-                          <ul className="absolute z-10 top-full left-0 right-0 mt-0.5 max-h-48 overflow-y-auto rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
+                          <ul className="absolute z-50 top-full start-0 end-0 mt-0.5 max-h-48 overflow-y-auto overflow-x-hidden rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
                             {filteredProducts.length === 0 ? (
                               <li className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">لا توجد نتائج</li>
                             ) : (
@@ -482,7 +539,7 @@ export default function ReceiptNew() {
                                       setFocusedProductRow(null)
                                       setProductSearchQuery('')
                                     }}
-                                    className="w-full text-right px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    className="w-full text-right px-3 py-2 text-sm whitespace-normal break-words hover:bg-gray-100 dark:hover:bg-gray-700"
                                   >
                                     {p.name}
                                   </button>
@@ -495,9 +552,9 @@ export default function ReceiptNew() {
                     </td>
                     <td className="py-1.5 px-3">
                       <input
-                        type="date"
-                        value={row.expiry_date}
-                        onChange={(e) => setExpiryDate(index, e.target.value)}
+                        type="month"
+                        value={toMonthInputValue(row.expiry_date)}
+                        onChange={(e) => setExpiryDate(index, fromMonthInputValue(e.target.value) ?? '')}
                         required
                         className={cn(
                           'w-full px-2 py-1.5 rounded border bg-white dark:bg-gray-800 text-sm',
@@ -525,6 +582,22 @@ export default function ReceiptNew() {
                         value={row.unit_price === 0 ? '' : row.unit_price}
                         onChange={(e) => setUnitPrice(index, Number(e.target.value) || 0)}
                         placeholder="0"
+                        className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+                      />
+                    </td>
+                    <td className="py-1.5 px-3">
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={row.selling_price == null || row.selling_price === 0 ? '' : row.selling_price}
+                        onChange={(e) => {
+                          const v = e.target.value.trim()
+                          if (v === '') setSellingPrice(index, undefined)
+                          else setSellingPrice(index, Number(v) || undefined)
+                        }}
+                        placeholder="تلقائي"
+                        title="اتركه فارغاً لاستخدام هامش البيع الافتراضي من الإعدادات"
                         className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
                       />
                     </td>
@@ -560,7 +633,7 @@ export default function ReceiptNew() {
                   if (!status) return null
                   return (
                     <tr key={`notice-${index}`} className="border-b border-gray-100 dark:border-gray-700">
-                      <td colSpan={5 + sortedWarehouses.length + 1} className="py-1 px-3">
+                      <td colSpan={6 + sortedWarehouses.length + 1} className="py-1 px-3">
                         <span className="text-xs">
                           <span className="font-medium text-gray-600 dark:text-gray-400">{row.product_name}:</span>{' '}
                           {status === 'merge' ? (
@@ -579,6 +652,147 @@ export default function ReceiptNew() {
                 })}
               </tbody>
             </table>
+
+            {/* Mobile View: Cards */}
+            <div className="sm:hidden divide-y divide-gray-100 dark:divide-gray-700">
+              {items.map((row, index) => {
+                const isSearchOpen = focusedProductRow === index
+                const searchNorm = productSearchQuery.trim().toLowerCase()
+                const filteredProducts = searchNorm
+                  ? products.filter((p) => p.name.toLowerCase().includes(searchNorm))
+                  : products
+                const status = getBatchMatchStatus(row)
+
+                return (
+                  <div key={index} className="p-4 space-y-4">
+                    <div className="flex justify-between items-start gap-2">
+                       <div ref={isSearchOpen ? productSearchRef : null} className="relative flex-1 min-w-0">
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">المنتج</label>
+                         <input
+                           type="text"
+                           value={isSearchOpen ? productSearchQuery : row.product_name}
+                           onChange={(e) => {
+                             setFocusedProductRow(index)
+                             setProductSearchQuery(e.target.value)
+                           }}
+                           onFocus={() => {
+                             setFocusedProductRow(index)
+                             setProductSearchQuery('')
+                           }}
+                           placeholder="بحث عن منتج..."
+                           className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-primary-500 font-bold"
+                         />
+                         {isSearchOpen && (
+                           <ul className="absolute z-20 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-xl ring-1 ring-black/5">
+                             {filteredProducts.length === 0 ? (
+                               <li className="px-3 py-2.5 text-sm text-gray-500">لا توجد نتائج</li>
+                             ) : (
+                               filteredProducts.map((p) => (
+                                 <li key={p.id}>
+                                   <button
+                                     type="button"
+                                     onClick={() => {
+                                       setProduct(index, p)
+                                       setFocusedProductRow(null)
+                                       setProductSearchQuery('')
+                                     }}
+                                     className="w-full text-right px-3 py-2.5 text-sm hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+                                   >
+                                     {p.name}
+                                   </button>
+                                 </li>
+                               ))
+                             )}
+                           </ul>
+                         )}
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => removeRow(index)}
+                         className="mt-6 p-2 text-red-500 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                       >
+                         <Trash2 className="w-5 h-5" />
+                       </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">الصلاحية</label>
+                         <input
+                           type="month"
+                           value={toMonthInputValue(row.expiry_date)}
+                           onChange={(e) => setExpiryDate(index, fromMonthInputValue(e.target.value) ?? '')}
+                           className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                         />
+                       </div>
+                       <div>
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">سعر الشراء</label>
+                         <input
+                           type="number"
+                           step="any"
+                           value={row.unit_price || ''}
+                           onChange={(e) => setUnitPrice(index, parseFloat(e.target.value) || 0)}
+                           className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-bold"
+                         />
+                       </div>
+                       <div className="col-span-2">
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">
+                           سعر البيع (اختياري)
+                         </label>
+                         <input
+                           type="number"
+                           step="any"
+                           value={row.selling_price == null || row.selling_price === 0 ? '' : row.selling_price}
+                           onChange={(e) => {
+                             const v = e.target.value.trim()
+                             if (v === '') setSellingPrice(index, undefined)
+                             else setSellingPrice(index, parseFloat(v) || undefined)
+                           }}
+                           placeholder="تلقائي حسب الإعدادات"
+                           className="w-full px-2 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                         />
+                       </div>
+                    </div>
+
+                    <div className="p-3 bg-gray-50 dark:bg-gray-900/40 rounded-xl space-y-3">
+                       <p className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold">التوزيع والمخزون</p>
+                       <div className="grid grid-cols-2 gap-3">
+                         {sortedWarehouses.map((w) => (
+                           <div key={w.id}>
+                             <label className="text-[10px] text-gray-500 mb-1 block">{w.name_ar}</label>
+                             <input
+                               type="number"
+                               value={row.distribution[w.id] || ''}
+                               onChange={(e) => setDistribution(index, w.id, parseFloat(e.target.value) || 0)}
+                               placeholder="0"
+                               className="w-full px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                             />
+                           </div>
+                         ))}
+                       </div>
+                       <div className="flex justify-between items-center pt-2 border-t border-gray-200 dark:border-gray-700">
+                         <span className="text-xs font-semibold text-gray-500">إجمالي الكمية:</span>
+                         <span className="text-sm font-black">{row.quantity} {row.unit_type === 'bulk' ? 'شكارة' : 'وحدة'}</span>
+                       </div>
+                    </div>
+
+                    <div className="flex justify-between items-center py-2 bg-primary-50 dark:bg-primary-950/20 px-3 rounded-lg">
+                       <span className="text-xs font-semibold text-primary-700 dark:text-primary-300">الإجمالي المالي:</span>
+                       <span className="text-sm font-black text-primary-600 dark:text-primary-400">{formatCurrency(row.total_price)}</span>
+                    </div>
+
+                    {status && (
+                       <div className={cn(
+                         "text-[10px] p-2 rounded-lg font-bold",
+                         status === 'merge' ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                       )}>
+                         {status === 'merge' ? "✓ دمج مع دفعة سابقة" : "⊕ دفعة جديدة كلياً"}
+                       </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
             {items.length > 0 && (
               <div className="flex justify-end p-3 bg-gray-50 dark:bg-gray-700/30 border-t border-gray-200 dark:border-gray-700">
                 <span className="font-bold">

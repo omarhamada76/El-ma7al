@@ -1,8 +1,13 @@
-/** Thermal label roll width (58mm is common for small pharmacy printers). */
-export const LABEL_WIDTH_MM = 58
+/**
+ * Xprinter XP-370B label dimensions.
+ * Label size: 2 in × 1.5 in  →  50.8 mm × 38.1 mm
+ */
 
-/** @page height for print layout (extra room for EXP line). */
-export const LABEL_PAGE_HEIGHT_MM = 40
+/** Label width (2 inches = 50.8 mm). */
+export const LABEL_WIDTH_MM = 50.8
 
-/** Print margin around label content. */
-export const LABEL_PRINT_MARGIN_MM = 1
+/** Label height (1.5 inches = 38.1 mm). */
+export const LABEL_PAGE_HEIGHT_MM = 38.1
+
+/** Print margin — keep minimal for small labels. */
+export const LABEL_PRINT_MARGIN_MM = 0.5

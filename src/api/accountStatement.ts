@@ -52,6 +52,7 @@ export async function getClientAccountStatement(
 ): Promise<AccountStatement> {
   const q = stmtQuery(params)
   return getStatement([
+    `/clients/${clientId}/statement${q}`,
     `/clients/${clientId}/account-statement${q}`,
     `/account-statement/client/${clientId}${q}`,
   ])
@@ -63,6 +64,7 @@ export async function getBarnAccountStatement(
 ): Promise<AccountStatement> {
   const q = stmtQuery(params)
   return getStatement([
+    `/barns/${barnId}/statement${q}`,
     `/barns/${barnId}/account-statement${q}`,
     `/account-statement/barn/${barnId}${q}`,
   ])

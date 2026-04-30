@@ -5,6 +5,8 @@ export interface SuppliersParams {
   page?: number
   limit?: number
   search?: string
+  /** أعلى مديونية أولاً */
+  sort?: 'balance_desc'
 }
 
 export async function getSuppliers(params: SuppliersParams = {}): Promise<{
@@ -12,7 +14,10 @@ export async function getSuppliers(params: SuppliersParams = {}): Promise<{
   total: number
 }> {
   const q = new URLSearchParams()
-  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== '') q.set(k, String(v)) })
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === '') return
+    q.set(k, String(v))
+  })
   return api.get(`/suppliers${q.toString() ? `?${q}` : ''}`)
 }
 
@@ -39,7 +44,7 @@ export async function getSupplierPurchasesWithItems(
 ): Promise<{ data: SupplierPurchaseWithItems[]; total: number }> {
   const q = new URLSearchParams()
   if (params?.limit != null) q.set('limit', String(params.limit))
-  return api.get(`/suppliers/${id}/purchases/with-items${q.toString() ? `?${q}` : ''}`)
+  return api.get(`/suppliers/${id}/purchases-with-items${q.toString() ? `?${q}` : ''}`)
 }
 
 export async function getSupplierPayments(

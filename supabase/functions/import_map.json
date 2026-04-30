@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "https://deno.land/x/djwt@v3.0.2/mod.ts": "https://deno.land/x/djwt@v3.0.2/mod.ts",
+    "npm:pg@8.13.1": "npm:pg@8.13.1"
+  }
+}

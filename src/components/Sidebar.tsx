@@ -13,6 +13,9 @@ import {
   BarChart3,
   Settings,
   UserCog,
+  ArrowRightLeft,
+  ClipboardList,
+  RotateCcw,
 } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
@@ -25,8 +28,11 @@ const navItemsAll = [
   { to: '/safe', label: 'الخزنه', icon: Wallet },
   { to: '/invoices/new', label: 'فاتورة بيع جديدة', icon: FileText },
   { to: '/receipt/new', label: 'استلام البضاعة', icon: PackageCheck },
+  { to: '/returns/new', label: 'مرتجع مبيعات', icon: RotateCcw },
+  { to: '/transfer-to-shobra', label: 'تحويل بضاعه لشبرا', icon: ArrowRightLeft },
+  { to: '/transfer-history', label: 'سجل التحويلات', icon: ClipboardList },
   { to: '/invoices', label: 'سجل الفواتير', icon: Receipt },
-  { to: '/payments', label: 'سجل المدفوعات', icon: CreditCard },
+  { to: '/payments', label: 'سجل السداد', icon: CreditCard },
   { to: '/reports', label: 'التقارير', icon: BarChart3 },
   { to: '/settings', label: 'الإعدادات', icon: Settings },
 ]
@@ -38,7 +44,10 @@ const staffNavTos = new Set([
   '/inventory',
   '/invoices/new',
   '/receipt/new',
+  '/transfer-to-shobra',
+  '/transfer-history',
   '/invoices',
+  '/returns/new',
   '/payments',
 ])
 
@@ -65,8 +74,12 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       )}
       dir="rtl"
     >
-      <div className="flex-shrink-0 border-b border-gray-200 p-4 dark:border-gray-700">
-        <h1 className="text-lg font-bold text-primary-600 dark:text-primary-400">
+      {/* Same height + border as <Header /> so the horizontal rule is one continuous line across the top bar */}
+      <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800 sm:gap-3 sm:px-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white p-1 shadow-sm dark:bg-gray-800 sm:h-10 sm:w-10">
+          <img src="/logo2.png" alt="الشعار" className="h-7 w-7 object-contain sm:h-8 sm:w-8" />
+        </div>
+        <h1 className="min-w-0 truncate text-base font-bold text-primary-600 dark:text-primary-400 sm:text-lg">
           الصيدلية البيطرية
         </h1>
       </div>

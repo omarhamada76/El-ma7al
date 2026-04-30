@@ -31,6 +31,14 @@ export interface Client {
   updated_at: string
   /** Present when client is loaded from list API (إجمالي حساب العميل) */
   balance?: number
+  total_account?: number
+  total_paid?: number
+}
+
+export interface ClientBalance {
+  total_account: number
+  total_paid: number
+  balance: number
 }
 
 export interface Barn {
@@ -40,6 +48,9 @@ export interface Barn {
   initial_debt: number
   total_invoices: number
   total_profit: number
+  total_account: number
+  total_paid: number
+  balance: number
   created_at: string
   updated_at: string
 }
@@ -85,6 +96,8 @@ export interface Product {
   bulk_bag_count?: number | null
   /** From list query — open bag has under 20% remaining (bulk). */
   bulk_open_bag_low?: boolean
+  /** From list query when warehouse_id filter is active */
+  warehouse_stock?: number | null
 }
 
 export interface ProductWarehouseStock {
@@ -187,8 +200,17 @@ export interface Invoice {
   discount_amount?: number
   billing_cycle_id?: number | null
   barn_billing_cycle_id?: number | null
+  /** من GET تفاصيل الفاتورة — مديونية العميل قبل/بعد تسجيل الفاتورة */
+  client_balance_before?: number | null
+  client_balance_after?: number | null
+  /** من JOIN warehouses — اسم المخزن */
+  warehouse_name_ar?: string | null
+  /** رصيد العنبر المحاسبي قبل/بعد تسجيل الفاتورة — من GET تفاصيل (عند وجود barn_id) */
+  barn_balance_before?: number | null
+  barn_balance_after?: number | null
   created_at: string
   created_by: string | null
+  items?: InvoiceItem[]
 }
 
 export interface InvoiceItem {
@@ -218,6 +240,19 @@ export interface Payment {
   id: number
   client_id: number
   barn_id: number | null
+  /** من JOIN مع clients عند قائمة/تفاصيل السداد */
+  client_name?: string | null
+  /** من JOIN مع barns عند قائمة/تفاصيل السداد */
+  barn_name?: string | null
+  /** مديونية العميل قبل تطبيق هذه الدفعة (GET تفاصيل فقط) */
+  client_balance_before?: number | null
+  /** مديونية العميل بعد تطبيق هذه الدفعة — إيقافي عند تسجيلها (GET تفاصيل فقط) */
+  client_balance_after?: number | null
+  /** رصيد العنبر المحاسبي قبل/بعد الدفعة — من GET تفاصيل (barn_id أو من الفاتورة المرتبطة) */
+  barn_balance_before?: number | null
+  barn_balance_after?: number | null
+  /** من JOIN الفاتورة المرتبطة — اسم المخزن (إن وُجد invoice_id) */
+  warehouse_name_ar?: string | null
   billing_cycle_id?: number | null
   barn_billing_cycle_id?: number | null
   amount: number
@@ -297,6 +332,8 @@ export interface DashboardStats {
   /** From local DB — optional when API omits (legacy) */
   clients_count?: number
   invoices_count?: number
+  inventory_value_purchase?: number
+  inventory_value_selling?: number
 }
 
 export interface DailySalesPoint {
@@ -306,27 +343,21 @@ export interface DailySalesPoint {
 }
 
 export interface AccountStatementRow {
+  id: number
   date: string
+  /** Full timestamp used for stable same-day ordering (oldest -> newest). */
+  sort_at?: string
   type: 'invoice' | 'payment'
   description: string
-  debit: number
-  credit: number
-  /** عرض مدين/دائن (يشمل سطر آجل بدون إعادة احتساب الرصيد) */
-  display_debit?: number
-  display_credit?: number
-  balance: number
-  /** اسم العنبر عند وجود فاتورة/دفعة مرتبطة بعنبر */
-  barn_name?: string | null
-  /** فاتورة */
+  quantity: number | null
+  unit_price: number | null
+  amount: number
+  direction: 'debit' | 'credit'
+  running_balance: number
   invoice_id?: number
-  invoice_total?: number
-  paid?: number
-  remaining?: number
-  status?: string
-  items?: { product_name: string; quantity: number }[]
-  /** دفعة */
   payment_id?: number
-  payment_amount?: number
+  /** سطور الفاتورة لعرض البيان (اختياري) */
+  items?: { product_name: string; quantity: number; total_price?: number }[]
   payment_method?: string
   settled_at?: string | null
 }

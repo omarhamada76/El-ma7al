@@ -1,14 +1,18 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Search, ArrowLeft } from 'lucide-react'
 import { getSuppliers, createSupplier } from '@/api/suppliers'
 import { formatCurrency } from '@/lib/utils'
 import AddSupplierModal from '@/components/AddSupplierModal'
+import SuccessOverlay from '@/components/SuccessOverlay'
 
 export default function Suppliers() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
+  const [sortByBalance, setSortByBalance] = useState(() => searchParams.get('sort') === 'balance_desc')
   const [addOpen, setAddOpen] = useState(false)
+  const [supplierCelebrate, setSupplierCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
   const queryClient = useQueryClient()
   const createMutation = useMutation({
     mutationFn: createSupplier,
@@ -16,9 +20,18 @@ export default function Suppliers() {
       queryClient.invalidateQueries({ queryKey: ['suppliers'] })
     },
   })
+  useEffect(() => {
+    setSortByBalance(searchParams.get('sort') === 'balance_desc')
+  }, [searchParams])
+
   const { data, isLoading } = useQuery({
-    queryKey: ['suppliers', search],
-    queryFn: () => getSuppliers({ search: search || undefined, limit: 50 }),
+    queryKey: ['suppliers', search, sortByBalance],
+    queryFn: () =>
+      getSuppliers({
+        search: search || undefined,
+        limit: 50,
+        sort: sortByBalance ? 'balance_desc' : undefined,
+      }),
   })
 
   const suppliers = data?.data ?? []
@@ -26,6 +39,13 @@ export default function Suppliers() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      <SuccessOverlay
+        open={!!supplierCelebrate}
+        title={supplierCelebrate?.title ?? ''}
+        subtitle={supplierCelebrate?.subtitle}
+        durationMs={1500}
+        onComplete={() => setSupplierCelebrate(null)}
+      />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-xl sm:text-2xl font-bold">الموردون</h1>
         <button
@@ -47,19 +67,43 @@ export default function Suppliers() {
               address: d.address || null,
               notes: d.notes || null,
             })
+            setSupplierCelebrate({
+              title: 'تم إضافة المورد بنجاح',
+              subtitle: 'يمكنك المتابعة من القائمة',
+            })
           }}
         />
       </div>
 
-      <div className="relative max-w-md">
-        <Search className="pointer-events-none absolute start-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="بحث بالاسم..."
-          className="w-full py-2 ps-12 pe-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-        />
+      <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div className="relative max-w-md flex-1">
+          <Search className="pointer-events-none absolute start-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="بحث بالاسم..."
+            className="w-full py-2 ps-12 pe-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            const next = !sortByBalance
+            setSortByBalance(next)
+            const p = new URLSearchParams(searchParams)
+            if (next) p.set('sort', 'balance_desc')
+            else p.delete('sort')
+            setSearchParams(p, { replace: true })
+          }}
+          className={
+            sortByBalance
+              ? 'px-3 py-2 rounded-lg text-sm font-medium bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 whitespace-nowrap'
+              : 'px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 whitespace-nowrap'
+          }
+        >
+          الأعلى مستحقات
+        </button>
       </div>
 
       <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden">

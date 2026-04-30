@@ -1,8 +1,11 @@
-/**
- * Supabase has been removed. The app uses only the local backend (Node + SQLite).
- * These exports exist so existing imports do not break.
- */
+import { createClient } from '@supabase/supabase-js'
 
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
 export const useLocalBackend = (): boolean => true
-export const isSupabaseConfigured = false
-export const supabase = null
+
+export const supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null

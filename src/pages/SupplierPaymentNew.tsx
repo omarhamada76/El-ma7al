@@ -4,6 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getSuppliers } from '@/api/suppliers'
 import { createSupplierPayment } from '@/api/supplierPayments'
 import { cn } from '@/lib/utils'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
 
 export default function SupplierPaymentNew() {
   const navigate = useNavigate()
@@ -16,6 +18,7 @@ export default function SupplierPaymentNew() {
   )
   const [notes, setNotes] = useState('')
   const [error, setError] = useState('')
+  const [paymentSuccess, setPaymentSuccess] = useState(false)
 
   const { data: suppliersData } = useQuery({
     queryKey: ['suppliers', 'list'],
@@ -31,10 +34,10 @@ export default function SupplierPaymentNew() {
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       queryClient.invalidateQueries({ queryKey: ['reports'] })
       queryClient.invalidateQueries({ queryKey: ['safe'] })
-      navigate('/suppliers')
+      setPaymentSuccess(true)
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'فشل تسجيل السداد')
+      setError(err instanceof Error ? err.message : 'تعذر تسجيل السداد')
     },
   })
 
@@ -60,6 +63,16 @@ export default function SupplierPaymentNew() {
 
   return (
     <div className="space-y-6 max-w-lg" dir="rtl">
+      <SuccessOverlay
+        open={paymentSuccess}
+        title="تم تسجيل السداد بنجاح"
+        subtitle="جاري التوجيه…"
+        durationMs={1700}
+        onComplete={() => {
+          setPaymentSuccess(false)
+          navigate('/suppliers')
+        }}
+      />
       <h1 className="text-2xl font-bold">سداد لمورد</h1>
       <p className="text-sm text-gray-500 dark:text-gray-400">
         اختر المورد، أدخل المبلغ، طريقة الدفع (كاش/بنك)، التاريخ والملاحظات. عند الحفظ يتم خصم المبلغ من رصيد الخزنه وتقليل ما نستحق للمورد.
@@ -67,9 +80,7 @@ export default function SupplierPaymentNew() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && (
-          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
-            {error}
-          </div>
+          <FeedbackBanner type="error" message={error} />
         )}
 
         <div>

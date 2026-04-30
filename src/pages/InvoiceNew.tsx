@@ -1,23 +1,40 @@
-import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams, useMatch, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Search, UserPlus, CheckCircle2 } from 'lucide-react'
+import { Plus, Trash2, Search, UserPlus } from 'lucide-react'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import type { Client } from '@/types/api'
 import AddClientModal from '@/components/AddClientModal'
 import { getWarehouses } from '@/api/warehouses'
-import { getProductsWithStockInWarehouse, getProductByBarcode, getWarehouseBatches, getBagInstance } from '@/api/products'
+import {
+  getProductsWithStockInWarehouse,
+  getProduct,
+  getProductByBarcode,
+  lookupProductBatchById,
+  getWarehouseBatches,
+  getBagInstance,
+} from '@/api/products'
 import type { ProductBatch } from '@/types/api'
 import { createInvoice, getInvoice, updateInvoice } from '@/api/invoices'
 import { useAuthStore } from '@/stores/auth'
-import { formatCurrency } from '@/lib/utils'
-import { cn } from '@/lib/utils'
+import { cn, formatCurrency, formatExpiryMonth, formatNumber, getNearExpiryWarning } from '@/lib/utils'
 import { quantityColumnLabelsForInvoiceNewRows } from '@/lib/quantityColumnHeader'
 import { parseScannedBarcode } from '@/components/ProductLabelPrint'
 import BatchPickerModal from '@/components/BatchPickerModal'
 import { getTopProducts } from '@/api/dashboard'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
+import {
+  clearInvoiceNewPendingBarcode,
+  normalizeInvoiceScanToken,
+  readInvoiceNewPendingBarcode,
+} from '@/lib/barcodeLookup'
 const LAST_WAREHOUSE_KEY = 'vet-pharmacy-new-invoice-warehouse'
-const INVOICE_NEW_DRAFT_KEY = 'vet-pharmacy-invoice-new-draft'
+/** Legacy draft key — removed on successful create so old data is not restored. */
+const LEGACY_INVOICE_NEW_DRAFT_KEY = 'vet-pharmacy-invoice-new-draft'
+
+/** Only the latest URL-barcode effect may strip `?barcode=` (overlapping deps, React Strict Mode remounts). */
+let invoiceUrlBarcodeEffectSeq = 0
 
 interface InvoiceRow {
   product_id: number
@@ -33,33 +50,6 @@ interface InvoiceRow {
   bag_id: number | null
   /** Bulk line only: quantity entry unit (stored quantity is always kg). */
   bulk_input_unit?: 'kg' | 'gram'
-}
-
-type InvoiceDraftV1 = {
-  v: 1
-  clientId: string
-  barnId: string
-  warehouseId: string
-  items: InvoiceRow[]
-  productSearch: string
-  payment_method: 'cash' | 'credit'
-  paid_amount: number
-  registerDeferred: boolean
-  immediateMethod: 'cash' | 'vodafone_cash' | 'instapay'
-  dueDate: string
-  discountType: 'amount' | 'percent'
-  discountValue: number
-  notes: string
-  barcodeInput: string
-  clientSearch: string
-}
-
-function clearInvoiceNewDraft() {
-  try {
-    localStorage.removeItem(INVOICE_NEW_DRAFT_KEY)
-  } catch {
-    /* ignore */
-  }
 }
 
 /** Display value for bulk quantity input (quantity is always kg in state). */
@@ -108,14 +98,13 @@ export default function InvoiceNew() {
   const [discountValue, setDiscountValue] = useState<number>(0)
   const [notes, setNotes] = useState('')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [barcodeInput, setBarcodeInput] = useState('')
   const [scanError, setScanError] = useState('')
   const [clientSearch, setClientSearch] = useState('')
   const [clientListOpen, setClientListOpen] = useState(false)
   const [addClientOpen, setAddClientOpen] = useState(false)
   const [formHydrated, setFormHydrated] = useState(false)
-  /** When false, skip persisting draft (avoids overwriting localStorage before restore). */
-  const [invoiceDraftReady, setInvoiceDraftReady] = useState(false)
   /** Shown after successful create/update; navigation runs after a short delay. */
   const [invoiceSuccess, setInvoiceSuccess] = useState<
     null | { kind: 'created' } | { kind: 'updated'; id: string }
@@ -126,12 +115,8 @@ export default function InvoiceNew() {
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   /** Blocks concurrent runInvoiceScan from URL effect + manual submit (same mutex). */
   const scanInFlightRef = useRef(false)
-  /** Same raw from ?barcode= already scheduled — skips StrictMode / double-effect duplicate runs. */
-  const urlScanPendingRef = useRef<string | null>(null)
   const clientPickerRef = useRef<HTMLDivElement>(null)
   const clientSearchInputRef = useRef<HTMLInputElement>(null)
-  /** Ensures draft is restored at most once per mount (avoids reloading after ?barcode= is stripped). */
-  const invoiceDraftLoadAttemptedRef = useRef(false)
 
   // Batch picker modal state
   const [batchPickerOpen, setBatchPickerOpen] = useState(false)
@@ -211,7 +196,11 @@ export default function InvoiceNew() {
     queryFn: getWarehouses,
   })
 
-  const { data: productsWithStock = [], isFetching: productsLoading } = useQuery({
+  const {
+    data: productsWithStock = [],
+    isFetching: productsLoading,
+    isFetched: productsQueryFetched,
+  } = useQuery({
     queryKey: ['products', 'warehouse', warehouseId],
     queryFn: () => getProductsWithStockInWarehouse(Number(warehouseId)),
     enabled: !!warehouseId,
@@ -245,6 +234,11 @@ export default function InvoiceNew() {
       const list = map.get(b.product_id) ?? []
       list.push(b)
       map.set(b.product_id, list)
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) =>
+        (a.expiry_date || '9999-12-31').localeCompare(b.expiry_date || '9999-12-31')
+      )
     }
     return map
   }, [warehouseBatches])
@@ -317,158 +311,22 @@ export default function InvoiceNew() {
     setFormHydrated(true)
   }, [isEdit, invoiceToEdit, warehouseId, productsWithStock, productsLoading, formHydrated])
 
-  const initialBarcode = searchParams.get('barcode') ?? ''
+  const urlBarcodeParam = searchParams.get('barcode') ?? ''
+  /** URL param or session backup (see `setInvoiceNewPendingBarcode` in barcodeLookup). */
+  const effectivePendingBarcode = (() => {
+    const u = normalizeInvoiceScanToken(urlBarcodeParam)
+    if (u) return u
+    return normalizeInvoiceScanToken(readInvoiceNewPendingBarcode())
+  })()
 
-  useLayoutEffect(() => {
-    if (isEdit) {
-      setInvoiceDraftReady(true)
-      return
-    }
-    if (invoiceDraftLoadAttemptedRef.current) return
-    invoiceDraftLoadAttemptedRef.current = true
-
-    const barcodeFromUrl = searchParams.get('barcode') ?? ''
-    if (barcodeFromUrl.trim()) {
-      setInvoiceDraftReady(true)
-      return
-    }
+  useEffect(() => {
+    if (isEdit) return
     try {
-      const raw = localStorage.getItem(INVOICE_NEW_DRAFT_KEY)
-      if (!raw) {
-        setInvoiceDraftReady(true)
-        return
-      }
-      const d = JSON.parse(raw) as InvoiceDraftV1
-      if (d.v !== 1) {
-        setInvoiceDraftReady(true)
-        return
-      }
-      setClientId(d.clientId ?? '')
-      setBarnId(d.barnId ?? '')
-      if (d.warehouseId) {
-        setWarehouseId(d.warehouseId)
-        try {
-          localStorage.setItem(LAST_WAREHOUSE_KEY, d.warehouseId)
-        } catch {
-          /* ignore */
-        }
-      }
-      setItems(Array.isArray(d.items) ? d.items : [])
-      setProductSearch(d.productSearch ?? '')
-      setPaymentMethod(d.payment_method === 'cash' ? 'cash' : 'credit')
-      setPaidAmount(Number(d.paid_amount) || 0)
-      setRegisterDeferred(d.registerDeferred !== false)
-      setImmediateMethod(
-        d.immediateMethod === 'vodafone_cash' || d.immediateMethod === 'instapay'
-          ? d.immediateMethod
-          : 'cash'
-      )
-      setDueDate(d.dueDate ?? '')
-      setDiscountType(d.discountType === 'percent' ? 'percent' : 'amount')
-      setDiscountValue(Number(d.discountValue) || 0)
-      setNotes(d.notes ?? '')
-      setBarcodeInput(d.barcodeInput ?? '')
-      setClientSearch(d.clientSearch ?? '')
+      localStorage.removeItem(LEGACY_INVOICE_NEW_DRAFT_KEY)
     } catch {
-      /* ignore corrupt draft */
+      /* ignore */
     }
-    setInvoiceDraftReady(true)
-    // Intentionally omit searchParams: run once per mount when !isEdit so stripping ?barcode= does not reload draft.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
   }, [isEdit])
-
-  const newInvoiceDraftPayload = useMemo((): InvoiceDraftV1 => {
-    return {
-      v: 1,
-      clientId,
-      barnId,
-      warehouseId,
-      items,
-      productSearch,
-      payment_method,
-      paid_amount,
-      registerDeferred,
-      immediateMethod,
-      dueDate,
-      discountType,
-      discountValue,
-      notes,
-      barcodeInput,
-      clientSearch,
-    }
-  }, [
-    clientId,
-    barnId,
-    warehouseId,
-    items,
-    productSearch,
-    payment_method,
-    paid_amount,
-    registerDeferred,
-    immediateMethod,
-    dueDate,
-    discountType,
-    discountValue,
-    notes,
-    barcodeInput,
-    clientSearch,
-  ])
-
-  useEffect(() => {
-    if (isEdit || !invoiceDraftReady) return
-    const t = window.setTimeout(() => {
-      try {
-        localStorage.setItem(INVOICE_NEW_DRAFT_KEY, JSON.stringify(newInvoiceDraftPayload))
-      } catch {
-        /* ignore quota */
-      }
-    }, 400)
-    return () => window.clearTimeout(t)
-  }, [isEdit, invoiceDraftReady, newInvoiceDraftPayload])
-
-  const resetNewInvoiceForm = useCallback(() => {
-    clearInvoiceNewDraft()
-    setClientId('')
-    setBarnId('')
-    setWarehouseId(getLastWarehouseId())
-    setItems([])
-    setProductSearch('')
-    setPaymentMethod('credit')
-    setPaidAmount(0)
-    setRegisterDeferred(true)
-    setImmediateMethod('cash')
-    setDueDate('')
-    setDiscountType('amount')
-    setDiscountValue(0)
-    setNotes('')
-    setBarcodeInput('')
-    setScanError('')
-    setClientSearch('')
-    setClientListOpen(false)
-    setError('')
-  }, [])
-
-  useEffect(() => {
-    if (!invoiceSuccess) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [invoiceSuccess])
-
-  useEffect(() => {
-    if (!invoiceSuccess) return
-    const t = window.setTimeout(() => {
-      if (invoiceSuccess.kind === 'created') {
-        navigate('/invoices')
-      } else {
-        navigate(`/invoices/${invoiceSuccess.id}`)
-      }
-      setInvoiceSuccess(null)
-    }, 1700)
-    return () => window.clearTimeout(t)
-  }, [invoiceSuccess, navigate])
 
   const createMutation = useMutation({
     mutationFn: createInvoice,
@@ -476,11 +334,14 @@ export default function InvoiceNew() {
       const notes = (data as { bulk_notifications?: { product_name: string; warehouse_name: string; expiry_date: string | null }[] })
         .bulk_notifications
       if (notes && notes.length > 0) {
-        for (const n of notes) {
-          window.alert(
-            `تم فتح شكارة جديدة تلقائياً — ${n.product_name}\nالصلاحية: ${n.expiry_date ?? '—'} | المخزن: ${n.warehouse_name ?? ''}`
-          )
-        }
+        setNotice(
+          notes
+            .map(
+              (n) =>
+                `تم فتح شكارة جديدة تلقائياً — ${n.product_name} (الصلاحية: ${formatExpiryMonth(n.expiry_date)} | المخزن: ${n.warehouse_name ?? ''})`
+            )
+            .join(' | ')
+        )
       }
       queryClient.invalidateQueries({ queryKey: ['invoices'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -496,11 +357,10 @@ export default function InvoiceNew() {
       if (barnId) {
         queryClient.invalidateQueries({ queryKey: ['barn', barnId] })
       }
-      clearInvoiceNewDraft()
       setInvoiceSuccess({ kind: 'created' })
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'فشل إنشاء الفاتورة')
+      setError(err instanceof Error ? err.message : 'تعذر إنشاء الفاتورة')
     },
   })
 
@@ -526,7 +386,7 @@ export default function InvoiceNew() {
       setInvoiceSuccess({ kind: 'updated', id })
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'فشل تحديث الفاتورة')
+      setError(err instanceof Error ? err.message : 'تعذر تحديث الفاتورة')
     },
   })
 
@@ -549,7 +409,9 @@ export default function InvoiceNew() {
       ? (totalAmount * Math.max(0, Math.min(100, discountValue))) / 100
       : Math.max(0, discountValue)
   const finalTotal = Math.max(0, totalAmount - discountAmount)
-  const remainingUnpaid = Math.max(0, Math.round(finalTotal) - Math.round(paid_amount))
+  /** فاتورة آجل: لا يُسجَّل مبلغ مدفوع الآن */
+  const effectivePaidAmount = payment_method === 'credit' ? 0 : paid_amount
+  const remainingUnpaid = Math.max(0, Math.round(finalTotal) - Math.round(effectivePaidAmount))
 
   const qtyColumnLabels = useMemo(
     () => quantityColumnLabelsForInvoiceNewRows(items, productsWithStock),
@@ -557,13 +419,19 @@ export default function InvoiceNew() {
   )
 
   useEffect(() => {
+    if (payment_method === 'credit') {
+      setPaidAmount(0)
+    }
+  }, [payment_method])
+
+  useEffect(() => {
     if (remainingUnpaid <= 0) {
       setRegisterDeferred(false)
-    } else if (paid_amount === 0) {
+    } else if (effectivePaidAmount === 0) {
       // Empty cart briefly had remainingUnpaid === 0 which cleared this; full unpaid must stay "آجل"
       setRegisterDeferred(true)
     }
-  }, [remainingUnpaid, paid_amount])
+  }, [remainingUnpaid, effectivePaidAmount])
 
   const filteredWarehouseProducts = productSearch.trim()
     ? productsWithStock.filter(({ product }) =>
@@ -593,8 +461,7 @@ export default function InvoiceNew() {
     return list
   }, [filteredWarehouseProducts, topSellingRows])
 
-  const formatExpiry = (d: string) =>
-    d === '9999-12-31' ? 'بدون تاريخ' : d
+  const formatExpiry = (d: string) => formatExpiryMonth(d)
 
   const getBatchSellingPrice = (productId: number, fallbackPrice: number) => {
     const batches = batchesByProduct.get(productId) ?? []
@@ -766,15 +633,15 @@ export default function InvoiceNew() {
     })
   }
 
-  const runInvoiceScanRef = useRef<(raw: string) => Promise<void>>(async () => {})
+  const runInvoiceScanRef = useRef<(raw: string) => Promise<boolean>>(async () => false)
 
-  runInvoiceScanRef.current = async (raw: string) => {
-    const trimmed = raw.trim()
-    if (!trimmed) return
+  runInvoiceScanRef.current = async (raw: string): Promise<boolean> => {
+    const trimmed = normalizeInvoiceScanToken(raw.trim())
+    if (!trimmed) return false
 
     if (!warehouseId) {
       setScanError('اختر المخزن أولاً')
-      return
+      return false
     }
 
     setScanError('')
@@ -782,25 +649,59 @@ export default function InvoiceNew() {
     const itemsSnap = itemsRef.current
 
     if (parsed.kind === 'batch') {
-      const batch = warehouseBatches.find((b) => b.id === parsed.batchId)
+      let batch: ProductBatch | undefined = warehouseBatches.find((b) => b.id === parsed.batchId)
       if (!batch) {
-        setScanError('الدفعة غير موجودة في المخزن الحالي')
-        return
+        const looked = await lookupProductBatchById(parsed.batchId)
+        if (looked.status === 'ok') {
+          if (Number(looked.batch.warehouse_id) !== Number(warehouseId)) {
+            setScanError('هذه الدفعة مسجّلة في مخزن آخر — غيّر المخزن أو امسح ملصقاً من هذا المخزن.')
+            return false
+          }
+          batch = looked.batch
+        } else if (looked.status === 'not_found') {
+          setScanError(
+            `لا توجد دفعة بالرقم ${parsed.batchId} في النظام. إذا كان الملصق قديماً أو من نسخة أخرى من البيانات، اطبع ملصقاً جديداً من المنتج أو المخزون.`
+          )
+          return false
+        } else {
+          setScanError('تعذّر التحقق من الدفعة (شبكة أو خادم). حدّث الصفحة وحاول مرة أخرى.')
+          return false
+        }
       }
       if (batch.unit_type === 'bulk') {
         setScanError('منتج بالكيلو: امسح ملصق الشكارة (رمز G) بدل دفعة')
-        return
+        return false
       }
       if ((batch.quantity ?? 0) <= 0) {
         setScanError('الدفعة الممسوحة لا تحتوي على مخزون')
-        return
+        return false
       }
-      const entry = productsWithStock.find((x) => x.product.id === batch.product_id)
+      let entry = productsWithStock.find((x) => x.product.id === batch.product_id)
       if (!entry) {
-        setScanError('المنتج غير متوفر في هذا المخزن')
-        return
+        try {
+          const product = await getProduct(String(batch.product_id))
+          entry = { product, stock: Math.max(0, batch.quantity ?? 0) }
+        } catch {
+          setScanError('المنتج غير متوفر في هذا المخزن')
+          return false
+        }
       }
       const displayName = entry.product.name
+      
+      // Warning for non-FEFO scan
+      const otherBatches = warehouseBatches.filter(
+        (b) =>
+          b.product_id === batch.product_id &&
+          (b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0)
+      )
+      const sorted = [...otherBatches].sort((a, b) =>
+        (a.expiry_date || '9999-12-31').localeCompare(b.expiry_date || '9999-12-31')
+      )
+      const earliest = sorted[0]?.expiry_date || '9999-12-31'
+      if ((batch.expiry_date || '9999-12-31') > earliest) {
+        setScanError(getNearExpiryWarning(earliest))
+      }
+
       const existingIdx = itemsSnap.findIndex((i) => i.batch_id === batch.id && !i.bag_id)
       if (existingIdx >= 0) {
         handleQuantityChange(existingIdx, itemsSnap[existingIdx].quantity + 1)
@@ -823,31 +724,36 @@ export default function InvoiceNew() {
           },
         ])
       }
-      return
+      return true
     }
 
     if (parsed.kind === 'bag') {
       const bag = await getBagInstance(parsed.bagInstanceId)
       if (!bag) {
         setScanError('لم يُعثر على الشكارة')
-        return
+        return false
       }
       if (Number(warehouseId) !== bag.warehouse_id) {
         setScanError('هذه الشكارة مسجّلة في مخزن آخر')
-        return
+        return false
       }
       if (!['open', 'sealed'].includes(bag.status) || bag.kg_remaining <= 0) {
         setScanError('الشكارة غير متاحة أو فارغة')
-        return
+        return false
       }
-      const entry = productsWithStock.find((x) => x.product.id === bag.product_id)
+      let entry = productsWithStock.find((x) => x.product.id === bag.product_id)
       if (!entry) {
-        setScanError('المنتج غير متوفر في هذا المخزن')
-        return
+        try {
+          const product = await getProduct(String(bag.product_id))
+          entry = { product, stock: Math.max(0, bag.kg_remaining ?? 0) }
+        } catch {
+          setScanError('المنتج غير متوفر في هذا المخزن')
+          return false
+        }
       }
       if (entry.product.unit_type !== 'bulk') {
         setScanError('ملصق الشكارة لا يطابق نوع المنتج')
-        return
+        return false
       }
       const batchMeta = warehouseBatches.find((b) => b.id === bag.batch_id)
       const price = batchMeta?.selling_price ?? bag.selling_price ?? entry.product.selling_price
@@ -874,24 +780,24 @@ export default function InvoiceNew() {
           },
         ])
       }
-      return
+      return true
     }
 
     const { code } = parsed
     if (!code) {
       setScanError('رمز غير صالح')
-      return
+      return false
     }
 
     const product = await getProductByBarcode(code)
     if (!product) {
       setScanError('المنتج غير موجود')
-      return
+      return false
     }
     const entry = productsWithStock.find((x) => x.product.id === product.id)
     if (!entry) {
       setScanError('المنتج غير متوفر في هذا المخزن')
-      return
+      return false
     }
 
     const productBatches = batchesByProduct.get(product.id) ?? []
@@ -900,56 +806,80 @@ export default function InvoiceNew() {
     )
     if (activeBatches.length === 0) {
       setScanError('لا توجد دفعات متاحة لهذا المنتج في المخزن')
-      return
+      return false
     }
 
     setBatchPickerProduct({ id: product.id, name: entry.product.name, stock: entry.stock })
     setBatchPickerBatches(activeBatches)
     setBatchPickerOpen(true)
+    return true
   }
 
   useEffect(() => {
     if (isEdit) return
-    const raw = initialBarcode.trim()
-    if (!raw || !warehouseId || productsWithStock.length === 0) return
-    // Wait until batches query finished so B/G and batch resolution see full data (without re-running when length changes).
+    const raw = effectivePendingBarcode.trim()
+    if (!raw || !warehouseId) return
+    // Products list is "with stock > 0" only — it can be empty while B/G labels still resolve via batches/bags.
+    if (!productsQueryFetched) return
+    // Wait until batches query finished so B/G and batch resolution see full data.
     if (!warehouseBatchesFetched) return
 
-    // Same URL value already scheduled (StrictMode re-runs effect before URL commits, or double mount).
-    if (urlScanPendingRef.current === raw) return
-    urlScanPendingRef.current = raw
-
-    // Remove ?barcode= immediately so this effect cannot run twice for the same navigation while await is in flight.
-    setSearchParams(
-      (prev) => {
-        const p = new URLSearchParams(prev)
-        p.delete('barcode')
-        return p
-      },
-      { replace: true }
-    )
-
+    const mySeq = ++invoiceUrlBarcodeEffectSeq
     let cancelled = false
+
     void (async () => {
+      // Serialize with any in-flight scan (manual field or a previous URL pass). Do not bail: in React Strict
+      // Mode the "second" pass must run after the first releases the mutex, or the line is never added.
+      const maxWaitMs = 4000
+      const stepMs = 16
+      let waited = 0
+      while (scanInFlightRef.current && waited < maxWaitMs) {
+        await new Promise((r) => setTimeout(r, stepMs))
+        waited += stepMs
+      }
       if (scanInFlightRef.current) {
-        urlScanPendingRef.current = null
+        setScanError('تعذّر إكمال المسح بسبب عملية مسح أخرى — أعد المحاولة.')
+        if (import.meta.env.DEV) {
+          console.warn('[InvoiceNew] URL barcode scan skipped: scan mutex still held after', maxWaitMs, 'ms')
+        }
         return
       }
+
       scanInFlightRef.current = true
+      let scanOk = false
       try {
-        await runInvoiceScanRef.current(raw)
+        scanOk = await runInvoiceScanRef.current(raw)
       } finally {
+        // Always release — cancelled must not skip release, or the remount's scan deadlocks on the mutex.
         scanInFlightRef.current = false
-        urlScanPendingRef.current = null
       }
-      if (!cancelled) {
-        barcodeInputRef.current?.focus()
-      }
+      // Do not strip ?barcode= until after scan — remount/Strict Mode must still see it so a fresh effect can add the line.
+      if (cancelled || mySeq !== invoiceUrlBarcodeEffectSeq || !scanOk) return
+      clearInvoiceNewPendingBarcode()
+      setSearchParams(
+        (prev) => {
+          const p = new URLSearchParams(prev)
+          p.delete('barcode')
+          return p
+        },
+        { replace: true }
+      )
+      barcodeInputRef.current?.focus()
     })()
+
     return () => {
       cancelled = true
+      // Invalidate URL-strip + stale async so the next mount/effect run (e.g. Strict Mode) owns the scan.
+      invoiceUrlBarcodeEffectSeq += 1
     }
-  }, [isEdit, initialBarcode, warehouseId, productsWithStock.length, warehouseBatchesFetched, setSearchParams])
+  }, [
+    isEdit,
+    effectivePendingBarcode,
+    warehouseId,
+    productsQueryFetched,
+    warehouseBatchesFetched,
+    setSearchParams,
+  ])
 
   const handleUnitPriceChange = (index: number, price: number) => {
     setItems((prev) => {
@@ -986,6 +916,7 @@ export default function InvoiceNew() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setNotice('')
     if (!clientId) {
       setError('اختر العميل')
       return
@@ -1002,12 +933,22 @@ export default function InvoiceNew() {
       setError('أضف صنفاً واحداً على الأقل')
       return
     }
+    const zeroPrice = items.find((r) => r.unit_price <= 0)
+    if (zeroPrice) {
+      setError(`سعر البيع للمنتج "${zeroPrice.product_name}" هو صفر. يرجى تعديله قبل الحفظ.`)
+      return
+    }
+
     const invalid = items.find(
       (r) => r.quantity <= 0 || (r.batch_stock != null && r.quantity > r.batch_stock) || (r.batch_stock == null && r.stock > 0 && r.quantity > r.stock)
     )
     if (invalid) {
-      const avail = invalid.batch_stock ?? invalid.stock
-      setError(`الكمية غير صالحة للمنتج "${invalid.product_name}" (المتاح: ${avail})`)
+      if (invalid.quantity <= 0) {
+        setError(`يرجى إدخال كمية للمنتج "${invalid.product_name}"`)
+      } else {
+        const avail = invalid.batch_stock ?? invalid.stock
+        setError(`الكمية غير صالحة للمنتج "${invalid.product_name}" (المتاح: ${avail})`)
+      }
       return
     }
     const gramBad = items.find((r) => {
@@ -1019,12 +960,12 @@ export default function InvoiceNew() {
       setError(`الحد الأدنى للكمية 1 جرام للمنتج «${gramBad.product_name}»`)
       return
     }
-    if (paid_amount < 0) {
+    if (effectivePaidAmount < 0) {
       setError('المبلغ المدفوع لا يمكن أن يكون سالباً')
       return
     }
     const effectiveRegisterDeferred =
-      remainingUnpaid > 0 && (registerDeferred || paid_amount === 0)
+      remainingUnpaid > 0 && (registerDeferred || effectivePaidAmount === 0)
     if (remainingUnpaid > 0 && !effectiveRegisterDeferred) {
       setError(
         'المبلغ المدفوع أقل من إجمالي الفاتورة.\nيرجى إدخال المبلغ المتبقي أو تسجيله كآجل'
@@ -1036,6 +977,26 @@ export default function InvoiceNew() {
       setError('اختر عميلاً من القائمة أو أضف عميلاً جديداً')
       return
     }
+
+    // FEFO Warning Confirmation
+    const hasAnyNearExpiryWarning = items.some((row) => {
+      if (!row.batch_id) return false
+      const productBatches = batchesByProduct.get(row.product_id) ?? []
+      const activeBatches = productBatches.filter((b) =>
+        b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0
+      )
+      const earliestExpiry = activeBatches[0]?.expiry_date || '9999-12-31'
+      const currentExpiry = row.batch_expiry || '9999-12-31'
+      return currentExpiry > earliestExpiry
+    })
+
+    if (hasAnyNearExpiryWarning) {
+      const confirmSave = window.confirm(
+        'تنبيه: بعض الأصناف المختارة لها دفعات أخرى أقرب انتهاءً في المخزن. هل تريد الاستمرار في الحفظ؟'
+      )
+      if (!confirmSave) return
+    }
+
     const itemPayload = items.map((i) => {
       const p = productsWithStock.find((x) => x.product.id === i.product_id)?.product
       const isBulk = p?.unit_type === 'bulk'
@@ -1073,9 +1034,9 @@ export default function InvoiceNew() {
         body: {
           customer_name: client.name,
           payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
-          paid_amount: Math.round(paid_amount),
+          paid_amount: Math.round(effectivePaidAmount),
           register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
-          immediate_payment_method: paid_amount > 0 ? immediateMethod : undefined,
+          immediate_payment_method: effectivePaidAmount > 0 ? immediateMethod : undefined,
           due_date: dueDate.trim() || undefined,
           discount_amount: discountAmount > 0 ? Math.round(discountAmount * 100) / 100 : undefined,
           notes: notes.trim() || undefined,
@@ -1096,9 +1057,9 @@ export default function InvoiceNew() {
       warehouse_id: Number(warehouseId),
       customer_name: client.name,
       payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
-      paid_amount: Math.round(paid_amount),
+      paid_amount: Math.round(effectivePaidAmount),
       register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
-      immediate_payment_method: paid_amount > 0 ? immediateMethod : undefined,
+      immediate_payment_method: effectivePaidAmount > 0 ? immediateMethod : undefined,
       due_date: dueDate.trim() || undefined,
       discount_amount: discountAmount > 0 ? Math.round(discountAmount * 100) / 100 : undefined,
       notes: notes.trim() || undefined,
@@ -1125,7 +1086,7 @@ export default function InvoiceNew() {
 
   if (isEdit && invoiceEditLoading) {
     return (
-      <div className="space-y-4 max-w-4xl animate-pulse" dir="rtl">
+      <div className="space-y-4 w-full max-w-full animate-pulse" dir="rtl">
         <div className="h-8 w-56 bg-gray-200 dark:bg-gray-700 rounded" />
         <div className="h-40 bg-gray-200 dark:bg-gray-700 rounded-xl" />
       </div>
@@ -1141,7 +1102,7 @@ export default function InvoiceNew() {
 
   if (invoiceCancelled) {
     return (
-      <div className="space-y-4 max-w-4xl" dir="rtl">
+      <div className="space-y-4 w-full max-w-full" dir="rtl">
         <h1 className="text-xl font-bold">فاتورة #{editInvoiceId}</h1>
         <p className="p-4 rounded-lg bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-200 border border-red-100 dark:border-red-900">
           هذه الفاتورة ملغاة ولا يمكن تعديلها. يمكنك عرضها من{' '}
@@ -1155,20 +1116,11 @@ export default function InvoiceNew() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl px-4 sm:px-0" dir="rtl">
+    <div className="space-y-6 w-full max-w-full min-w-0" dir="rtl">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl sm:text-2xl font-bold">
           {isEdit ? `تعديل فاتورة #${editInvoiceId}` : 'فاتورة بيع جديدة'}
         </h1>
-        {!isEdit && (
-          <button
-            type="button"
-            onClick={resetNewInvoiceForm}
-            className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-          >
-            مسح المسودة
-          </button>
-        )}
       </div>
 
       {structuralEditBlocked && (
@@ -1196,11 +1148,10 @@ export default function InvoiceNew() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className={structuralEditBlocked ? 'pointer-events-none opacity-60 space-y-6' : 'space-y-6'}>
-        {error && (
-          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
-            {error}
-          </div>
+        {notice && (
+          <FeedbackBanner type="warning" message={notice} />
         )}
+        {error && <FeedbackBanner type="error" message={error} />}
 
         <AddClientModal
           open={addClientOpen}
@@ -1363,7 +1314,7 @@ export default function InvoiceNew() {
               }}
               disabled={isEdit}
               className={cn(
-                'w-full max-w-xs px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
+                'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
                 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500',
                 isEdit && 'opacity-60 cursor-not-allowed'
               )}
@@ -1374,6 +1325,12 @@ export default function InvoiceNew() {
                 <option key={w.id} value={w.id}>{w.name_ar}</option>
               ))}
             </select>
+            {effectivePendingBarcode.trim() && !warehouseId && (
+              <p className="text-sm text-amber-600 dark:text-amber-400 mt-1">
+                تم مسح رمز دفعة أو شكارة (أو باركود). اختر المخزن أولاً — سيُضاف الصنف تلقائياً بعد التحميل،
+                أو أعد المسح من حقل «مسح البيع» أدناه.
+              </p>
+            )}
           </div>
           </div>
         </div>
@@ -1401,7 +1358,7 @@ export default function InvoiceNew() {
               }}
               placeholder="B7 / G15 / باركود العبوة (يفتح نافذة الدفعات)..."
               className={cn(
-                'w-full max-w-sm px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
+                'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
                 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
               )}
             />
@@ -1410,9 +1367,9 @@ export default function InvoiceNew() {
             )}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] gap-6 min-w-0">
         {showProductList && (
-          <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3">
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 min-w-0 max-w-full">
             <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase">
               منتجات المخزن
             </h3>
@@ -1424,7 +1381,7 @@ export default function InvoiceNew() {
                 onChange={(e) => setProductSearch(e.target.value)}
                 placeholder="بحث في منتجات المخزن..."
                 className={cn(
-                  'w-full max-w-sm py-2 ps-11 pe-3 rounded-lg border bg-white dark:bg-gray-800',
+                  'w-full py-2 ps-11 pe-3 rounded-lg border bg-white dark:bg-gray-800',
                   'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 text-sm'
                 )}
               />
@@ -1448,10 +1405,10 @@ export default function InvoiceNew() {
                         stock === 0 ? 'text-gray-400 dark:text-gray-500' : 'text-gray-500 dark:text-gray-400'
                       )}
                     >
-                      متوفر: {product.unit_type === 'bulk' ? `${stock.toFixed(2)} كجم` : stock}
+                      متوفر: {product.unit_type === 'bulk' ? `${formatNumber(stock, 2)} كجم` : formatNumber(stock, 0)}
                       {nearest && nearest.expiry_date !== '9999-12-31' && (
                         <span className="text-xs text-amber-600 dark:text-amber-400">
-                          صلاحية: {nearest.expiry_date}
+                          صلاحية: {formatExpiryMonth(nearest.expiry_date)}
                         </span>
                       )}
                     </span>
@@ -1479,7 +1436,7 @@ export default function InvoiceNew() {
           </div>
         )}
 
-        <div className={showProductList ? '' : 'lg:col-span-2'}>
+        <div className={showProductList ? 'min-w-0' : 'xl:col-span-2 min-w-0'}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
               أصناف الفاتورة
@@ -1506,18 +1463,19 @@ export default function InvoiceNew() {
               لا توجد منتجات مسجلة. أضف منتجات من صفحة المخزون أولاً.
             </p>
           )}
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <table className="w-full table-fixed border-collapse text-xs sm:text-sm">
+          <div className="responsive-table-container min-w-0">
+            {/* Table for Desktop */}
+            <table className="hidden sm:table w-full min-w-[36rem] border-collapse text-xs sm:text-sm table-fixed">
               <colgroup>
-                <col style={{ width: '30%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '24%' }} />
+                <col style={{ width: '42%' }} />
+                <col style={{ width: '16%' }} />
                 <col style={{ width: '20%' }} />
-                <col style={{ width: '8%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '6%' }} />
               </colgroup>
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
-                  <th className="text-right py-2 sm:py-2.5 px-1.5 sm:px-3 min-w-0 font-medium">المنتج</th>
+                  <th className="text-right py-2 sm:py-2.5 px-1.5 sm:px-3 min-w-[12rem] font-medium">المنتج</th>
                   <th className="text-right py-2 sm:py-2.5 px-1 sm:px-2 font-medium">
                     <span className="hidden sm:inline">{qtyColumnLabels.full}</span>
                     <span className="sm:hidden">{qtyColumnLabels.short}</span>
@@ -1541,12 +1499,21 @@ export default function InvoiceNew() {
               <tbody ref={itemsTableRef}>
                 {items.map((row, index) => {
                   const breakdown = row.quantity > 0 ? getFefoBreakdown(row.product_id, row.quantity) : []
-                  const isBulkProduct =
-                    productsWithStock.find((p) => p.product.id === row.product_id)?.product.unit_type === 'bulk'
+                  const pEntries = productsWithStock.find((p) => p.product.id === row.product_id)
+                  const isBulkProduct = pEntries?.product.unit_type === 'bulk'
+
+                  const productBatches = batchesByProduct.get(row.product_id) ?? []
+                  const activeBatches = productBatches.filter((b) =>
+                    b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0
+                  )
+                  const earliestExpiry = activeBatches[0]?.expiry_date || '9999-12-31'
+                  const currentExpiry = row.batch_expiry || '9999-12-31'
+                  const hasNearerExpiry = currentExpiry > earliestExpiry
+
                   return (
                   <tr key={index} className="border-b border-gray-100 dark:border-gray-700">
-                    <td className="py-2 px-1.5 sm:px-3 align-top min-w-0">
-                      <div className="space-y-1.5 min-w-0">
+                    <td className="py-2 px-1.5 sm:px-3 align-top min-w-[12rem]">
+                      <div className="space-y-1.5 min-w-0 max-w-full">
                       {isBulkProduct && (
                         <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold">منتج بالوزن (كجم)</span>
                       )}
@@ -1568,32 +1535,39 @@ export default function InvoiceNew() {
                           )}
                           {row.batch_expiry && (
                             <span className="text-xs text-gray-500 dark:text-gray-400">
-                              صلاحية: {row.batch_expiry}
+                              صلاحية: {formatExpiryMonth(row.batch_expiry)}
                             </span>
                           )}
                           {row.batch_stock != null && (
                             <span className="text-xs text-gray-500 dark:text-gray-400">
-                              (متاح: {row.batch_stock.toFixed(2)} كجم)
+                              (متاح: {formatNumber(row.batch_stock, 2)} كجم)
                             </span>
                           )}
                         </div>
                       ) : row.batch_id ? (
-                        <div className="mt-1 flex items-center gap-1 flex-wrap">
-                          <span className="text-xs bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 px-1.5 py-0.5 rounded-full">
-                            دفعة #{row.batch_id}
-                          </span>
-                          {row.batch_expiry && (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              صلاحية: {row.batch_expiry}
+                        <div className="mt-1 flex flex-col gap-1">
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="text-xs bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 px-1.5 py-0.5 rounded-full">
+                              دفعة #{row.batch_id}
                             </span>
-                          )}
-                          {row.batch_stock != null && (
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              (متاح: {row.batch_stock})
-                            </span>
+                            {row.batch_expiry && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                صلاحية: {formatExpiryMonth(row.batch_expiry)}
+                              </span>
+                            )}
+                            {row.batch_stock != null && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                (متاح: {row.batch_stock})
+                              </span>
+                            )}
+                          </div>
+                          {hasNearerExpiry && (
+                            <p className="text-[10px] sm:text-xs text-amber-600 dark:text-amber-400 font-medium">
+                              {getNearExpiryWarning(earliestExpiry)}
+                            </p>
                           )}
                         </div>
-                      ) : breakdown.length > 0 && (() => {
+                      ) : (breakdown.length > 0 ? (() => {
                         const distinctPrices = [...new Set(
                           breakdown.map(b => b.selling_price).filter((p): p is number => p != null && p > 0)
                         )]
@@ -1628,7 +1602,7 @@ export default function InvoiceNew() {
                             )}
                           </div>
                         )
-                      })()}
+                      })() : null)}
                       </div>
                     </td>
                     <td className="py-2 px-1 sm:px-2 align-top min-w-0">
@@ -1679,7 +1653,7 @@ export default function InvoiceNew() {
                             </select>
                           </div>
                           <p className="text-[10px] text-gray-500 dark:text-gray-400">
-                            = {row.quantity.toFixed(3)} كيلو
+                            = {formatNumber(row.quantity, 3)} كيلو
                           </p>
                         </div>
                       ) : (
@@ -1733,19 +1707,133 @@ export default function InvoiceNew() {
                 })}
               </tbody>
             </table>
+
+            {/* Mobile View: Cards */}
+            <div className="sm:hidden divide-y divide-gray-100 dark:divide-gray-700">
+              {items.map((row, index) => {
+                const isBulkProduct =
+                  productsWithStock.find((p) => p.product.id === row.product_id)?.product.unit_type === 'bulk'
+                
+                const productBatches = batchesByProduct.get(row.product_id) ?? []
+                const activeBatches = productBatches.filter((b) =>
+                  b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0
+                )
+                const earliestExpiry = activeBatches[0]?.expiry_date || '9999-12-31'
+                const currentExpiry = row.batch_expiry || '9999-12-31'
+                const hasNearerExpiry = currentExpiry > earliestExpiry
+
+                return (
+                  <div key={index} className="p-3 space-y-3">
+                    <div className="flex justify-between items-start gap-2">
+                       <div className="min-w-0">
+                         {isBulkProduct && (
+                           <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold mb-1">منتج بالوزن</span>
+                         )}
+                         <p className="text-sm font-bold text-gray-900 dark:text-gray-100 leading-tight">
+                           {row.product_name}
+                         </p>
+                         {(row.bag_id || row.batch_id) && (
+                            <div className="mt-1 flex flex-col gap-1">
+                              <div className="flex flex-wrap gap-1">
+                                {row.bag_id && <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full">شكارة #{row.bag_id}</span>}
+                                {row.batch_id && <span className="text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">دفعة #{row.batch_id}</span>}
+                              </div>
+                              {row.batch_id && hasNearerExpiry && (
+                                <p className="text-[9px] text-amber-600 dark:text-amber-400 font-bold">
+                                  {getNearExpiryWarning(earliestExpiry)}
+                                </p>
+                              )}
+                            </div>
+                         )}
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => setItems((p) => p.filter((_, i) => i !== index))}
+                         className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded"
+                       >
+                         <Trash2 className="w-4 h-4" />
+                       </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">
+                           {qtyColumnLabels.short}
+                         </label>
+                         {isBulkProduct ? (
+                           <div className="flex items-center gap-1">
+                             <input
+                               type="number"
+                               min={0}
+                               step={row.bulk_input_unit === 'gram' ? 1 : 0.001}
+                               value={bulkInputDisplayValue(row.quantity, row.bulk_input_unit)}
+                               onChange={(e) => {
+                                 const val = parseFloat(e.target.value) || 0
+                                 const kg = row.bulk_input_unit === 'gram' ? val / 1000 : val
+                                 handleQuantityChange(index, kg)
+                               }}
+                               className="w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                             />
+                             <select
+                               value={row.bulk_input_unit}
+                               onChange={(e) => {
+                                 const next = e.target.value as 'kg' | 'gram'
+                                 setItems((prev) => {
+                                   const n = [...prev]
+                                   n[index] = { ...n[index], bulk_input_unit: next }
+                                   return n
+                                 })
+                               }}
+                               className="text-xs px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900"
+                             >
+                               <option value="kg">كجم</option>
+                               <option value="gram">جم</option>
+                             </select>
+                           </div>
+                         ) : (
+                           <input
+                             type="number"
+                             min={0}
+                             value={row.quantity || ''}
+                             onChange={(e) => handleQuantityChange(index, parseInt(e.target.value, 10) || 0)}
+                             className="w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-bold"
+                           />
+                         )}
+                       </div>
+                       <div>
+                         <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">سعر الوحدة</label>
+                         <input
+                           type="number"
+                           min={0}
+                           step="any"
+                           value={row.unit_price || ''}
+                           onChange={(e) => handleUnitPriceChange(index, parseFloat(e.target.value) || 0)}
+                           className="w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-bold text-primary-600 dark:text-primary-400"
+                         />
+                       </div>
+                    </div>
+                    <div className="flex justify-between items-center py-1 bg-primary-50/50 dark:bg-primary-900/10 px-2 rounded-lg">
+                       <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">الإجمالي:</span>
+                       <span className="text-sm font-bold text-gray-900 dark:text-gray-100">{formatCurrency(row.total_price)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
             {items.length > 0 && (
-              <div className="p-3 bg-gray-50 dark:bg-gray-700/30 border-t border-gray-200 dark:border-gray-700 space-y-2">
-                <div className="flex justify-end gap-4 items-center flex-wrap">
-                  <span>المجموع قبل الخصم: {formatCurrency(totalAmount)}</span>
+              <div className="p-3 sm:p-4 bg-gray-50 dark:bg-gray-700/30 border-t border-gray-200 dark:border-gray-700 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:justify-end gap-3 sm:gap-6 sm:items-center">
+                  <span className="text-sm sm:text-base font-medium">المجموع: {formatCurrency(totalAmount)}</span>
                   <div className="flex items-center gap-2">
-                    <label className="text-sm text-gray-600 dark:text-gray-400">خصم</label>
+                    <label className="text-xs sm:text-sm font-bold text-gray-500 dark:text-gray-400 uppercase">خصم</label>
                     <select
                       value={discountType}
                       onChange={(e) => setDiscountType(e.target.value as 'amount' | 'percent')}
-                      className="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+                      className="px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-primary-500"
                     >
-                      <option value="amount">مبلغ (ج.م)</option>
-                      <option value="percent">نسبة %</option>
+                      <option value="amount">ج.م</option>
+                      <option value="percent">%</option>
                     </select>
                     <input
                       type="number"
@@ -1755,18 +1843,18 @@ export default function InvoiceNew() {
                       value={discountValue || ''}
                       onChange={(e) => setDiscountValue(Number(e.target.value) || 0)}
                       placeholder={discountType === 'percent' ? '%' : '0'}
-                      className="w-24 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+                      className="w-24 px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-bold focus:ring-2 focus:ring-primary-500"
                     />
                     {discountAmount > 0 && (
-                      <span className="text-amber-600 dark:text-amber-400 text-sm">
+                      <span className="text-red-600 dark:text-red-400 text-sm font-bold">
                         − {formatCurrency(discountAmount)}
                       </span>
                     )}
                   </div>
                 </div>
-                <div className="flex justify-end">
-                  <span className="font-bold">
-                    الإجمالي بعد الخصم: {formatCurrency(finalTotal)}
+                <div className="flex justify-end pt-2 border-t border-gray-200 dark:border-gray-600 sm:border-0">
+                  <span className="text-lg sm:text-xl font-black text-primary-600 dark:text-primary-400">
+                    الإجمالي النهائي: {formatCurrency(finalTotal)}
                   </span>
                 </div>
               </div>
@@ -1780,7 +1868,12 @@ export default function InvoiceNew() {
           <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             ٣. الدفع والملاحظات
           </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div
+          className={cn(
+            'grid gap-4',
+            payment_method === 'cash' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
+          )}
+        >
           <div>
             <label className="block text-sm font-medium mb-1">طريقة الدفع *</label>
             <select
@@ -1795,23 +1888,25 @@ export default function InvoiceNew() {
               <option value="credit">آجل</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">المبلغ المدفوع (ج.م)</label>
-            <input
-              type="number"
-              min={0}
-              value={paid_amount || ''}
-              onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
-              className={cn(
-                'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-              )}
-              placeholder="0"
-            />
-          </div>
+          {payment_method === 'cash' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">المبلغ المدفوع (ج.م)</label>
+              <input
+                type="number"
+                min={0}
+                value={paid_amount || ''}
+                onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
+                className={cn(
+                  'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
+                  'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
+                )}
+                placeholder="0"
+              />
+            </div>
+          )}
         </div>
 
-        {paid_amount > 0 && (
+        {payment_method === 'cash' && paid_amount > 0 && (
           <div>
             <label className="block text-sm font-medium mb-1">طريقة السداد الفوري</label>
             <select
@@ -1833,22 +1928,31 @@ export default function InvoiceNew() {
 
         {items.length > 0 && (
           <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/40 px-4 py-3 space-y-2">
-            <p className="text-sm font-medium">
-              المتبقي:{' '}
-              <span className={remainingUnpaid > 0 ? 'text-amber-700 dark:text-amber-300' : ''}>
-                {formatCurrency(remainingUnpaid)}
-              </span>
-            </p>
-            {remainingUnpaid > 0 && (
-              <label className="flex items-center gap-2 cursor-pointer text-sm">
-                <input
-                  type="checkbox"
-                  checked={registerDeferred}
-                  onChange={(e) => setRegisterDeferred(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                <span>تسجيل المتبقي كآجل</span>
-              </label>
+            {payment_method === 'credit' ? (
+              <p className="text-sm font-medium">
+                إجمالي الفاتورة على الآجل:{' '}
+                <span className="text-amber-700 dark:text-amber-300">{formatCurrency(finalTotal)}</span>
+              </p>
+            ) : (
+              <>
+                <p className="text-sm font-medium">
+                  المتبقي:{' '}
+                  <span className={remainingUnpaid > 0 ? 'text-amber-700 dark:text-amber-300' : ''}>
+                    {formatCurrency(remainingUnpaid)}
+                  </span>
+                </p>
+                {remainingUnpaid > 0 && (
+                  <label className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={registerDeferred}
+                      onChange={(e) => setRegisterDeferred(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                    <span>تسجيل المتبقي كآجل</span>
+                  </label>
+                )}
+              </>
             )}
             <div>
               <label className="block text-sm font-medium mb-1 text-gray-600 dark:text-gray-400">
@@ -1931,29 +2035,27 @@ export default function InvoiceNew() {
         />
       )}
 
-      {invoiceSuccess && (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center p-4 invoice-success-backdrop"
-          role="status"
-          aria-live="polite"
-          aria-busy="true"
-        >
-          <div className="absolute inset-0 bg-black/45 dark:bg-black/55" aria-hidden />
-          <div className="relative w-full max-w-sm rounded-2xl bg-white dark:bg-gray-800 shadow-2xl border border-gray-200 dark:border-gray-600 px-8 py-10 text-center invoice-success-card-anim">
-            <CheckCircle2
-              className="w-[4.5rem] h-[4.5rem] mx-auto text-emerald-500 dark:text-emerald-400 mb-4 drop-shadow-sm"
-              strokeWidth={1.35}
-              aria-hidden
-            />
-            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              {invoiceSuccess.kind === 'created'
-                ? 'تم إنشاء الفاتورة بنجاح'
-                : 'تم حفظ التعديلات بنجاح'}
-            </p>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">جاري التوجيه…</p>
-          </div>
-        </div>
-      )}
+      <SuccessOverlay
+        open={!!invoiceSuccess}
+        title={
+          invoiceSuccess?.kind === 'created'
+            ? 'تم إنشاء الفاتورة بنجاح'
+            : invoiceSuccess
+              ? 'تم حفظ التعديلات بنجاح'
+              : ''
+        }
+        subtitle="جاري التوجيه…"
+        durationMs={1700}
+        onComplete={() => {
+          if (!invoiceSuccess) return
+          if (invoiceSuccess.kind === 'created') {
+            navigate('/invoices')
+          } else {
+            navigate(`/invoices/${invoiceSuccess.id}`)
+          }
+          setInvoiceSuccess(null)
+        }}
+      />
     </div>
   )
 }

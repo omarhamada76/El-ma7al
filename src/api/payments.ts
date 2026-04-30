@@ -30,6 +30,10 @@ export async function getPayments(params: PaymentsParams = {}): Promise<{
   return api.get(`/payments${q.toString() ? `?${q}` : ''}`)
 }
 
+export async function getPayment(id: string): Promise<Payment> {
+  return api.get(`/payments/${id}`)
+}
+
 export async function createPayment(body: CreatePaymentBody): Promise<Payment> {
   return api.post('/payments', body)
 }

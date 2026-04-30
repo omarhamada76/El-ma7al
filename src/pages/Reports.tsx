@@ -17,8 +17,8 @@ export default function Reports() {
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10))
 
   const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ['dashboard', 'stats'],
-    queryFn: getDashboardStats,
+    queryKey: ['dashboard', 'stats', from, to],
+    queryFn: () => getDashboardStats({ from, to }),
   })
 
   return (
@@ -29,8 +29,6 @@ export default function Reports() {
           نظرة عامة على الأداء والمؤشرات
         </p>
       </div>
-
-      <DashboardKpiGrid stats={stats} isLoading={statsLoading} showFinancials={showFinancials} />
 
       <div className="flex flex-wrap gap-4 items-end">
         <div>
@@ -53,10 +51,20 @@ export default function Reports() {
         </div>
       </div>
 
+      <DashboardKpiGrid
+        stats={stats}
+        isLoading={statsLoading}
+        showFinancials={showFinancials}
+        periodFrom={from}
+        periodTo={to}
+      />
+
       <DashboardCharts from={from} to={to} />
 
       <p className="text-sm text-gray-500 dark:text-gray-400">
-        الرسوم البيانية تتبع الفترة المحددة. أرقام بطاقات المؤشرات أعلاه ملخص إجمالي من النظام.
+        الرسوم البيانية وبطاقتا المبيعات والأرباح تتبعان الفترة المحددة. باقي بطاقات المؤشرات (مديونيات، خزنة، مخزون، فواتير
+        غير مسددة، إلخ) تعكس الوضع الحالي أو التراكمي في النظام وليست مقيدة بالفترة فقط. اضغط بطاقة لعرض تحليل مختصر وروابط
+        مفلترة.
       </p>
     </div>
   )

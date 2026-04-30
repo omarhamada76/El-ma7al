@@ -1,20 +1,25 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Package, Search, ArrowLeft, Pencil, Trash2, ChevronRight, ChevronLeft } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { Plus, Package, Search, ArrowLeft, Pencil, Trash2, ChevronRight, ChevronLeft, FileText } from 'lucide-react'
 import { getProducts, createProduct, updateProduct, deleteProduct, getWarehouseStockMap } from '@/api/products'
 import type { Product } from '@/types/api'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions, createCategory } from '@/api/categories'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatNumber } from '@/lib/utils'
 import AddProductModal from '@/components/AddProductModal'
 import AddCategoryModal from '@/components/AddCategoryModal'
 import ContextMenu from '@/components/ContextMenu'
 import SetProductStockModal from '@/components/SetProductStockModal'
+import EditProductModal from '@/components/EditProductModal'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
+import { useAuthStore } from '@/stores/auth'
+import { canManageProductBatches } from '@/lib/roles'
 
 const LAST_WAREHOUSE_KEY = 'vet-pharmacy-inventory-warehouse'
 
-/** Exactly one list filter at a time; `low_stock` is local-only (not in the URL). */
+/** Exactly one list filter at a time; `low_stock` may come from `?lowStock=1`. */
 type InventoryListFilter = 'all' | 'low_stock' | 'unpriced' | 'expiring'
 
 function getLastWarehouseId(): string {
@@ -28,24 +33,32 @@ function getLastWarehouseId(): string {
 }
 
 export default function Inventory() {
+  const role = useAuthStore((s) => s.user?.role)
+  const canEditBatches = canManageProductBatches(role)
+  const isSuperAdmin = role === 'super_admin'
   const [search, setSearch] = useState('')
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [inventoryCelebrate, setInventoryCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; product: Product } | null>(null)
   const [editProduct, setEditProduct] = useState<Product | null>(null)
   const [warehouseId, setWarehouseId] = useState<number | undefined>(() => {
     const saved = getLastWarehouseId()
-    if (!saved) return undefined
-    const n = Number(saved)
-    return Number.isInteger(n) ? n : undefined
+    if (saved) {
+      const n = Number(saved)
+      if (Number.isInteger(n)) return n
+    }
+    return 1
   })
+
+
   const [category, setCategory] = useState('')
   const [page, setPage] = useState(1)
   const [searchParams, setSearchParams] = useSearchParams()
-  /** URL encodes `unpriced` / `expiring`; low-stock is session-only. */
-  const [lowStockMode, setLowStockMode] = useState(false)
+  const [lowStockMode, setLowStockMode] = useState(() => searchParams.get('lowStock') === '1')
   const listFilter = useMemo((): InventoryListFilter => {
     if (searchParams.get('expiring') === '1') return 'expiring'
     if (searchParams.get('unpriced') === '1') return 'unpriced'
-    if (lowStockMode) return 'low_stock'
+    if (searchParams.get('lowStock') === '1' || lowStockMode) return 'low_stock'
     return 'all'
   }, [searchParams, lowStockMode])
   const applyListFilter = useCallback(
@@ -55,6 +68,7 @@ export default function Inventory() {
         setSearchParams(
           (prev) => {
             const p = new URLSearchParams(prev)
+            p.set('lowStock', '1')
             p.delete('unpriced')
             p.delete('expiring')
             return p
@@ -67,6 +81,7 @@ export default function Inventory() {
       setSearchParams(
         (prev) => {
           const p = new URLSearchParams(prev)
+          p.delete('lowStock')
           if (next === 'unpriced') {
             p.set('unpriced', '1')
             p.delete('expiring')
@@ -87,6 +102,9 @@ export default function Inventory() {
   useEffect(() => {
     if (searchParams.get('expiring') === '1' || searchParams.get('unpriced') === '1') {
       setLowStockMode(false)
+    }
+    if (searchParams.get('lowStock') === '1') {
+      setLowStockMode(true)
     }
   }, [searchParams])
   const [addOpen, setAddOpen] = useState(false)
@@ -125,9 +143,10 @@ export default function Inventory() {
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
       setContextMenu(null)
+      setInventoryCelebrate({ title: 'تم حذف المنتج بنجاح' })
     },
     onError: (err) => {
-      alert(err instanceof Error ? err.message : 'فشل حذف المنتج')
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر حذف المنتج')
     },
   })
   const createCategoryMutation = useMutation({
@@ -136,6 +155,7 @@ export default function Inventory() {
       queryClient.invalidateQueries({ queryKey: ['categories'] })
       setCategory(data.name_ar)
       setAddCategoryOpen(false)
+      setInventoryCelebrate({ title: 'تم إضافة التصنيف بنجاح' })
     },
   })
   const { data: warehouses = [] } = useQuery({
@@ -146,8 +166,10 @@ export default function Inventory() {
     queryKey: ['categories'],
     queryFn: getCategoryOptions,
   })
-  const limit = 100
-  const { data, isLoading } = useQuery({
+
+
+  const limit = 50
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: ['products', search, warehouseId, category, listFilter, page],
     queryFn: () =>
       getProducts({
@@ -164,6 +186,7 @@ export default function Inventory() {
         limit,
         page,
       }),
+    placeholderData: keepPreviousData,
   })
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / limit))
@@ -183,18 +206,21 @@ export default function Inventory() {
     )
   }, [searchParams, setSearchParams])
   useEffect(() => {
-    if (totalPages > 0 && page > totalPages) setPage(totalPages)
-  }, [totalPages, page])
-  const { data: warehouseStockMap = {} } = useQuery({
-    queryKey: ['warehouse-stock', warehouseId],
-    queryFn: () => getWarehouseStockMap(warehouseId!),
-    enabled: !!warehouseId,
-  })
+    if (data !== undefined && totalPages > 0 && page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [totalPages, page, data])
 
   const products = data?.data ?? []
   const [editPriceId, setEditPriceId] = useState<number | null>(null)
   const [editPurchasePriceVal, setEditPurchasePriceVal] = useState('')
   const [editSellingPriceVal, setEditSellingPriceVal] = useState('')
+  /** Captured when saving inline prices; reapplied after refetch so <main> scroll does not jump to top. */
+  const restoreInventoryScrollY = useRef<number | null>(null)
+  /**
+   * Inline prices: PATCH /products/:id → server `updateProduct` → `products.purchase_price` / `products.selling_price`
+   * (SQLite `server/db.js` or Postgres `server/pgdb.js`). List refetch keeps UI aligned with DB.
+   */
   const priceMutation = useMutation({
     mutationFn: ({
       id,
@@ -205,18 +231,114 @@ export default function Inventory() {
       purchase_price: number
       selling_price: number
     }) => updateProduct(String(id), { purchase_price, selling_price }),
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: ['products'] })
-      queryClient.invalidateQueries({ queryKey: ['product', String(id)] })
+    onSuccess: async (updated: Product, { id }) => {
+      queryClient.setQueriesData({ queryKey: ['products'] }, (old: unknown) => {
+        if (!old || typeof old !== 'object' || !('data' in old)) return old
+        const rec = old as { data: Product[]; total: number }
+        if (!Array.isArray(rec.data)) return old
+        return {
+          ...rec,
+          data: rec.data.map((row) => (row.id === id ? { ...row, ...updated } : row)),
+        }
+      })
+      await queryClient.invalidateQueries({ queryKey: ['products'] })
+      await queryClient.invalidateQueries({ queryKey: ['product', String(id)] })
       setEditPriceId(null)
+      setInventoryCelebrate({ title: 'تم حفظ الأسعار بنجاح' })
+    },
+    onError: (err) => {
+      restoreInventoryScrollY.current = null
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر حفظ الأسعار')
     },
   })
 
+  useLayoutEffect(() => {
+    const y = restoreInventoryScrollY.current
+    if (y == null) return
+    const main = document.querySelector('main')
+    if (!(main instanceof HTMLElement)) {
+      restoreInventoryScrollY.current = null
+      return
+    }
+    main.scrollTop = y
+    restoreInventoryScrollY.current = null
+  }, [data])
+
+  useEffect(() => {
+    if (!errorMessage) return
+    const t = window.setTimeout(() => setErrorMessage(null), 4500)
+    return () => window.clearTimeout(t)
+  }, [errorMessage])
+
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
+
   return (
     <div className="space-y-6" dir="rtl">
+      <SuccessOverlay
+        open={!!inventoryCelebrate}
+        title={inventoryCelebrate?.title ?? ''}
+        subtitle={inventoryCelebrate?.subtitle}
+        durationMs={1500}
+        onComplete={() => setInventoryCelebrate(null)}
+      />
+      {errorMessage && <FeedbackBanner type="error" message={errorMessage} />}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-xl sm:text-2xl font-bold">المخزون</h1>
         <div className="flex gap-2">
+          {products.length > 0 && (
+            <button
+              type="button"
+              disabled={isGeneratingPdf}
+              onClick={async () => {
+                setIsGeneratingPdf(true)
+                try {
+                  const { createInventoryPdfBlob } = await import('@/lib/inventoryPdf')
+                  let title = 'تقرير المخزون'
+                  if (listFilter === 'low_stock') title = 'تقرير نواقص المخزون'
+                  else if (listFilter === 'unpriced') title = 'تقرير منتجات بدون سعر'
+                  else if (listFilter === 'expiring') title = 'تقرير منتجات قاربت على الانتهاء'
+
+                  const dateStr = new Date().toLocaleDateString('ar-EG', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })
+
+                  const blob = await createInventoryPdfBlob(products, title, {
+                    warehouseName: warehouses.find((w) => w.id === warehouseId)?.name_ar,
+                    warehouseStockMap: Object.fromEntries(
+                      products.map((p) => [p.id, p.warehouse_stock ?? p.batch_total_quantity ?? 0])
+                    ),
+                  })
+
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `${title}-${dateStr}.pdf`
+                  document.body.appendChild(a)
+                  a.click()
+                  document.body.removeChild(a)
+                  URL.revokeObjectURL(url)
+                  
+                  setInventoryCelebrate({ title: 'تم إنشاء ملف PDF بنجاح' })
+                } catch (err) {
+                  setErrorMessage('فشل إنشاء ملف PDF')
+                  console.error(err)
+                } finally {
+                  setIsGeneratingPdf(false)
+                }
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 font-medium disabled:opacity-50"
+            >
+              {isGeneratingPdf ? (
+                <div className="w-4 h-4 border-2 border-gray-300 border-t-primary-600 rounded-full animate-spin" />
+              ) : (
+                <FileText className="w-4 h-4" />
+              )}
+              تصدير PDF
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setAddOpen(true)}
@@ -225,6 +347,7 @@ export default function Inventory() {
             <Plus className="w-4 h-4" />
             إضافة منتج
           </button>
+
           <AddProductModal
             open={addOpen}
             onClose={() => setAddOpen(false)}
@@ -241,18 +364,20 @@ export default function Inventory() {
                 alert_level_kg: d.alert_level_kg ?? null,
                 barcode: d.barcode || null,
                 notes: d.notes || null,
+                image_url: d.image_url ?? null,
                 unit_type: d.unit_type,
                 bag_weight_kg: d.bag_weight_kg ?? null,
                 initial_batches: d.initial_batches ?? [],
                 warehouse_id: d.warehouse_id,
               })
+              setInventoryCelebrate({ title: 'تم إضافة المنتج بنجاح' })
             }}
           />
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <div className="relative flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[280px]">
           <Search className="pointer-events-none absolute start-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
           <input
             type="search"
@@ -354,13 +479,20 @@ export default function Inventory() {
             لا توجد منتجات. أضف منتجاً أو سجّل استلاماً من مورد.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm min-w-[500px]">
+          <div className={cn("responsive-table-container transition-opacity duration-200", isFetching && "opacity-50 pointer-events-none")}>
+            <table className="responsive-table">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
                   <th className="text-right py-3 px-4">المنتج</th>
-                  <th className="text-right py-3 px-4">الفئة</th>
-                  <th className="text-right py-3 px-4">سعر الشراء</th>
+                  <th className="text-right py-3 px-4 hidden sm:table-cell">الفئة</th>
+                  <th
+                    className={cn(
+                      'text-right py-3 px-4',
+                      editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                    )}
+                  >
+                    سعر الشراء
+                  </th>
                   <th className="text-right py-3 px-4">سعر البيع</th>
                   <th className="text-right py-3 px-4">المخزون</th>
                   <th className="text-right py-3 px-4"></th>
@@ -377,22 +509,68 @@ export default function Inventory() {
                   const spMax = p.selling_price_max
                   const hasBatchSP = spMin != null && spMax != null
                   const spIsSingle = hasBatchSP && spMin === spMax
+                  /** Inline PATCH only updates `products.*`; ranges block quick edit (use product detail for batches). */
+                  const batchRangePreventsInline =
+                    (hasBatchPP && !ppIsSingle) || (hasBatchSP && !spIsSingle)
                   // Stock: use batch_total_quantity when available, else warehouse map
                   const batchQty = p.batch_total_quantity ?? null
+                  /** Same pattern as «سعر الشراء»: batch min/max when present, else product default or «تحديد السعر». */
+                  const sellingPriceCellContent = hasBatchSP ? (
+                    spIsSingle ? (
+                      formatCurrency(spMin!)
+                    ) : (
+                      <span>
+                        {formatCurrency(spMin!)} — {formatCurrency(spMax!)}
+                      </span>
+                    )
+                  ) : p.selling_price > 0 ? (
+                    formatCurrency(p.selling_price)
+                  ) : (
+                    <span className="text-amber-600">تحديد السعر</span>
+                  )
                   return (
                   <tr
                     key={p.id}
-                    className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                    className={cn(
+                      'border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30',
+                      /* Top-align row while editing so price cells line up (align-middle vs uneven cell heights skews inputs) */
+                      editPriceId === p.id && '[&>td]:!align-top'
+                    )}
                     onContextMenu={(e) => {
                       e.preventDefault()
                       setContextMenu({ x: e.clientX, y: e.clientY, product: p })
                     }}
                   >
-                    <td className="py-2 px-4 font-medium">{p.name}</td>
-                    <td className="py-2 px-4 text-gray-500 dark:text-gray-400">
+                    <td className="py-2 px-4">
+                      <div className="flex items-center gap-2 font-medium">
+                        {p.image_url ? (
+                          <img
+                            src={p.image_url}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            className="h-9 w-9 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-600"
+                          />
+                        ) : (
+                          <span
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 text-gray-400"
+                            aria-hidden
+                          >
+                            <Package className="h-4 w-4" />
+                          </span>
+                        )}
+                        <span className="min-w-0 break-words">{p.name}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 px-4 text-gray-500 dark:text-gray-400 hidden sm:table-cell">
                       {p.category ?? '—'}
                     </td>
-                    <td className="py-2 px-4">
+                    <td
+                      className={cn(
+                        'py-2 px-4 align-middle',
+                        editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                      )}
+                    >
                       {editPriceId === p.id ? (
                         <input
                           type="number"
@@ -402,7 +580,8 @@ export default function Inventory() {
                           onChange={(e) => setEditPurchasePriceVal(e.target.value)}
                           autoFocus
                           placeholder="شراء"
-                          className="w-24 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+                          inputMode="decimal"
+                          className="h-9 w-full min-w-[4.5rem] max-w-[6.5rem] rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800"
                         />
                       ) : hasBatchPP ? (
                         ppIsSingle
@@ -412,15 +591,19 @@ export default function Inventory() {
                         formatCurrency(p.purchase_price)
                       )}
                     </td>
-                    <td className="py-2 px-4">
+                    <td className="py-2 px-4 align-middle">
                       {editPriceId === p.id ? (
                         <form
-                          className="flex items-center gap-1 flex-wrap"
+                          className="flex flex-row flex-wrap items-center gap-x-2 gap-y-1.5"
                           onSubmit={(e) => {
                             e.preventDefault()
                             const purchase = parseFloat(editPurchasePriceVal)
                             const selling = parseFloat(editSellingPriceVal)
                             if (!isNaN(purchase) && purchase >= 0 && !isNaN(selling) && selling >= 0) {
+                              const main = document.querySelector('main')
+                              if (main instanceof HTMLElement) {
+                                restoreInventoryScrollY.current = main.scrollTop
+                              }
                               priceMutation.mutate({
                                 id: p.id,
                                 purchase_price: purchase,
@@ -436,14 +619,35 @@ export default function Inventory() {
                             value={editSellingPriceVal}
                             onChange={(e) => setEditSellingPriceVal(e.target.value)}
                             placeholder="بيع"
-                            className="w-20 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"
+                            inputMode="decimal"
+                            className="h-9 min-w-[4.5rem] max-w-[6.5rem] flex-1 rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800 sm:w-20 sm:flex-none sm:max-w-none"
                           />
-                          <button type="submit" className="text-xs text-primary-600 dark:text-primary-400 font-medium">حفظ</button>
-                          <button type="button" onClick={() => setEditPriceId(null)} className="text-xs text-gray-500">إلغاء</button>
+                          <button
+                            type="submit"
+                            disabled={priceMutation.isPending}
+                            className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:pointer-events-none disabled:opacity-60 dark:bg-primary-500 dark:hover:bg-primary-400"
+                          >
+                            {priceMutation.isPending ? '…' : 'حفظ'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditPriceId(null)}
+                            disabled={priceMutation.isPending}
+                            className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/80"
+                          >
+                            إلغاء
+                          </button>
                         </form>
+                      ) : batchRangePreventsInline ? (
+                        <span className="text-gray-800 dark:text-gray-200">{sellingPriceCellContent}</span>
                       ) : (
                         <button
                           type="button"
+                          title={
+                            hasBatchSP || hasBatchPP
+                              ? 'يُحفَظ في قاعدة البيانات كسعر افتراضي للمنتج. لتعديل سعر كل دفعة استخدم صفحة التفاصيل.'
+                              : undefined
+                          }
                           onClick={() => {
                             setEditPriceId(p.id)
                             setEditPurchasePriceVal(String(p.purchase_price ?? ''))
@@ -451,13 +655,7 @@ export default function Inventory() {
                           }}
                           className="hover:underline"
                         >
-                          {hasBatchSP ? (
-                            spIsSingle
-                              ? formatCurrency(spMin)
-                              : <span>{formatCurrency(spMin)} — {formatCurrency(spMax)}</span>
-                          ) : (
-                            p.selling_price > 0 ? formatCurrency(p.selling_price) : <span className="text-amber-600">تحديد السعر</span>
-                          )}
+                          {sellingPriceCellContent}
                         </button>
                       )}
                     </td>
@@ -467,7 +665,7 @@ export default function Inventory() {
                           <span className="inline-flex items-center gap-1 flex-wrap justify-end">
                             {p.unit_type === 'bulk' ? (
                               <>
-                                {Number(warehouseStockMap[p.id] ?? 0).toFixed(2)} كيلو
+                                {formatNumber(Number(p.warehouse_stock ?? 0), 2)} كيلو
                                 {p.bulk_bag_count != null && p.bulk_bag_count > 0 && (
                                   <span className="text-gray-500 dark:text-gray-400 text-xs">
                                     ({p.bulk_bag_count} شكارة)
@@ -480,7 +678,7 @@ export default function Inventory() {
                                 )}
                               </>
                             ) : (
-                              warehouseStockMap[p.id] ?? 0
+                              p.warehouse_stock ?? 0
                             )}
                           </span>
                           <button
@@ -491,7 +689,7 @@ export default function Inventory() {
                                 product: p,
                                 warehouseId,
                                 warehouseName: wh?.name_ar ?? '',
-                                currentQuantity: warehouseStockMap[p.id] ?? 0,
+                                currentQuantity: p.warehouse_stock ?? 0,
                               })
                             }}
                             className="text-primary-600 dark:text-primary-400 hover:underline text-sm font-medium"
@@ -500,9 +698,11 @@ export default function Inventory() {
                           </button>
                         </div>
                       ) : (
-                        batchQty != null && batchQty > 0
-                          ? <span>{p.unit_type === 'bulk' ? `${Number(batchQty).toFixed(2)} كجم` : batchQty}</span>
-                          : <span className="text-gray-400">—</span>
+                        <span>
+                          {p.unit_type === 'bulk'
+                            ? `${formatNumber(Number(batchQty ?? 0), 2)} كجم`
+                            : formatNumber(Number(batchQty ?? 0), 0)}
+                        </span>
                       )}
                     </td>
                     <td className="py-2 px-4">
@@ -574,48 +774,23 @@ export default function Inventory() {
               : []
           }
         />
-        <AddProductModal
-          open={!!editProduct}
-          onClose={() => setEditProduct(null)}
-          categoryOptions={categoryOptions}
-          warehouseOptions={warehouses.map((w) => ({ id: w.id, name_ar: w.name_ar }))}
-          initialValues={
-            editProduct
-              ? {
-                  name: editProduct.name,
-                  company: editProduct.company ?? '',
-                  category: editProduct.category ?? '',
-                  purchase_price: editProduct.purchase_price,
-                  selling_price: editProduct.selling_price,
-                  alert_level: editProduct.alert_level,
-                  alert_level_kg: editProduct.alert_level_kg ?? null,
-                  unit_type: editProduct.unit_type,
-                  bag_weight_kg: editProduct.bag_weight_kg ?? null,
-                  barcode: editProduct.barcode ?? '',
-                  notes: editProduct.notes ?? '',
-                }
-              : undefined
-          }
-          onSubmit={async (data) => {
-            if (!editProduct) return
-            await updateMutation.mutateAsync({
-              id: editProduct.id,
-              body: {
-                name: data.name,
-                company: data.company || null,
-                category: data.category || null,
-                purchase_price: data.purchase_price,
-                selling_price: data.selling_price,
-                alert_level: data.alert_level,
-                alert_level_kg: data.alert_level_kg ?? null,
-                unit_type: data.unit_type,
-                bag_weight_kg: data.bag_weight_kg ?? null,
-                barcode: data.barcode || null,
-                notes: data.notes || null,
-              },
-            })
-          }}
-        />
+        {editProduct && (
+          <EditProductModal
+            open={!!editProduct}
+            onClose={() => setEditProduct(null)}
+            product={editProduct}
+            categoryOptions={categoryOptions}
+            warehouseOptions={warehouses.map((w) => ({ id: w.id, name_ar: w.name_ar }))}
+            canManageBatches={canEditBatches}
+            isSuperAdmin={isSuperAdmin}
+            onProductSaved={() => {
+              queryClient.invalidateQueries({ queryKey: ['products'] })
+              queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
+              setEditProduct(null)
+              setInventoryCelebrate({ title: 'تم حفظ بيانات المنتج بنجاح' })
+            }}
+          />
+        )}
         {stockEdit && (
           <SetProductStockModal
             open={!!stockEdit}
@@ -628,6 +803,7 @@ export default function Inventory() {
             onSuccess={() => {
               queryClient.invalidateQueries({ queryKey: ['warehouse-stock', stockEdit.warehouseId] })
               queryClient.invalidateQueries({ queryKey: ['products'] })
+              setInventoryCelebrate({ title: 'تم تحديث الكمية بنجاح' })
             }}
           />
         )}

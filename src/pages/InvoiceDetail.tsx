@@ -11,17 +11,20 @@ import {
 import { getBarn } from '@/api/barns'
 import { getClient } from '@/api/clients'
 import { getWarehouses } from '@/api/warehouses'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { quantityColumnHeaderFromInvoiceItems } from '@/lib/quantityColumnHeader'
 import {
   createInvoicePdfBlob,
   normalizeWhatsAppPhone,
   paymentMethodLabel,
+  isInvoiceCashPayment,
   shareInvoicePdfToWhatsApp,
 } from '@/lib/invoicePdf'
 import type { InvoiceItem } from '@/types/api'
 import { useAuthStore } from '@/stores/auth'
 import { canCancelFullInvoice } from '@/lib/roles'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import InvoiceReceiptPrint from '@/components/InvoiceReceiptPrint'
 
 function formatBatchExpiry(d: string | null | undefined) {
   if (!d || d === '9999-12-31') return 'بدون تاريخ'
@@ -34,7 +37,7 @@ export default function InvoiceDetail() {
   const role = useAuthStore((s) => s.user?.role)
   const canCancel = canCancelFullInvoice(role)
   const [sharing, setSharing] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null)
   const [returnModal, setReturnModal] = useState<InvoiceItem | null>(null)
   const [returnQtyInput, setReturnQtyInput] = useState('')
 
@@ -72,6 +75,21 @@ export default function InvoiceDetail() {
     () => quantityColumnHeaderFromInvoiceItems(invoice?.items ?? []),
     [invoice?.items]
   )
+
+  const invBarnBefore =
+    invoice != null
+      ? typeof invoice.barn_balance_before === 'number'
+        ? invoice.barn_balance_before
+        : Number(invoice.barn_balance_before)
+      : NaN
+  const invBarnAfter =
+    invoice != null
+      ? typeof invoice.barn_balance_after === 'number'
+        ? invoice.barn_balance_after
+        : Number(invoice.barn_balance_after)
+      : NaN
+  const hasInvBarnBalanceSnapshot =
+    invoice != null && Number.isFinite(invBarnBefore) && Number.isFinite(invBarnAfter)
 
   const isCancelled = (invoice?.invoice_lifecycle ?? 'active') === 'cancelled'
   const structuralAllowed = invoice?.structural_edit_allowed !== false
@@ -112,10 +130,16 @@ export default function InvoiceDetail() {
     mutationFn: () => cancelInvoice(String(id)),
     onSuccess: () => {
       invalidateStockQueries()
-      setToast('تم إلغاء الفاتورة واستعادة المخزون والخزنة حسب السياسة المحاسبية.')
+      setToast({
+        type: 'success',
+        message: 'تم إلغاء الفاتورة واستعادة المخزون والخزنة حسب السياسة المحاسبية.',
+      })
     },
     onError: (e) => {
-      alert(e instanceof Error ? e.message : 'تعذر إلغاء الفاتورة')
+      setToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'تعذر إلغاء الفاتورة',
+      })
     },
   })
 
@@ -126,7 +150,10 @@ export default function InvoiceDetail() {
       setReturnModal(null)
     },
     onError: (e) => {
-      alert(e instanceof Error ? e.message : 'تعذر إزالة الصنف')
+      setToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'تعذر إزالة الصنف',
+      })
     },
   })
 
@@ -140,14 +167,17 @@ export default function InvoiceDetail() {
       setReturnModal(null)
     },
     onError: (e) => {
-      alert(e instanceof Error ? e.message : 'تعذر تسجيل الإرجاع')
+      setToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'تعذر تسجيل الإرجاع',
+      })
     },
   })
 
   function handleCancelInvoice() {
     if (
       !window.confirm(
-        'إلغاء هذه الفاتورة سيعيد جميع المنتجات إلى المخزن ويلغي المدفوعات المرتبطة بها (خصم نقدي من الخزنة عند الدفع نقداً). هل أنت متأكد؟'
+        'إلغاء هذه الفاتورة سيعيد جميع المنتجات إلى المخزن ويلغي السداد المرتبط بها (خصم نقدي من الخزنة عند الدفع نقداً). هل أنت متأكد؟'
       )
     ) {
       return
@@ -165,7 +195,7 @@ export default function InvoiceDetail() {
     const maxQ = Number(returnModal.quantity) || 0
     const q = parseFloat(returnQtyInput.replace(',', '.'))
     if (!Number.isFinite(q) || q <= 0 || q > maxQ + 0.0001) {
-      alert('أدخل كمية إرجاع صالحة')
+      setToast({ type: 'warning', message: 'أدخل كمية إرجاع صالحة' })
       return
     }
     const isFull = q >= maxQ - 0.0001
@@ -182,27 +212,46 @@ export default function InvoiceDetail() {
     const label = isBulk ? 'كيلو' : 'وحدة'
     const place = isBulk ? 'الشكارة' : 'المخزن'
     if (isFull) {
-      const toastMsg = `تمت إعادة ${maxQ} ${label} من ${returnModal.product_name} إلى ${place} ✓`
-      removeItemMutation.mutate(returnModal.id, { onSuccess: () => setToast(toastMsg) })
+      const toastMsg = `تمت إعادة ${maxQ} ${label} من ${returnModal.product_name} إلى ${place} بنجاح`
+      removeItemMutation.mutate(returnModal.id, {
+        onSuccess: () => setToast({ type: 'success', message: toastMsg }),
+      })
     } else {
-      const toastMsg = `تمت إعادة ${q} ${label} من ${returnModal.product_name} إلى ${place} ✓`
+      const toastMsg = `تمت إعادة ${q} ${label} من ${returnModal.product_name} إلى ${place} بنجاح`
       partialReturnMutation.mutate(
         { itemId: returnModal.id, returned_quantity: q },
-        { onSuccess: () => setToast(toastMsg) }
+        { onSuccess: () => setToast({ type: 'success', message: toastMsg }) }
       )
     }
+  }
+
+  function invoiceBarnBalanceSnapshot() {
+    const b = invoice?.barn_balance_before
+    const a = invoice?.barn_balance_after
+    const bn = typeof b === 'number' ? b : Number(b)
+    const an = typeof a === 'number' ? a : Number(a)
+    if (!Number.isFinite(bn) || !Number.isFinite(an)) return null
+    return { before: bn, after: an }
   }
 
   async function handleShareWhatsApp() {
     if (!invoice || !warehouseName) return
     setSharing(true)
     try {
-      const blob = await createInvoicePdfBlob(invoice, warehouseName, barn?.name ?? null)
+      const blob = await createInvoicePdfBlob(
+        invoice,
+        warehouseName,
+        barn?.name ?? null,
+        invoiceBarnBalanceSnapshot()
+      )
       const wa = normalizeWhatsAppPhone(client?.phone)
       await shareInvoicePdfToWhatsApp(blob, invoice.id, { phoneDigits: wa })
     } catch (e) {
       console.error(e)
-      alert(e instanceof Error ? e.message : 'تعذر إنشاء الملف أو المشاركة')
+      setToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'تعذر إنشاء الملف أو المشاركة',
+      })
     } finally {
       setSharing(false)
     }
@@ -220,12 +269,7 @@ export default function InvoiceDetail() {
   return (
     <div className="w-full min-w-0 max-w-full space-y-6 relative" dir="rtl">
       {toast && (
-        <div
-          className="fixed top-4 left-4 right-4 z-50 mx-auto max-w-lg rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 shadow-lg dark:border-emerald-800 dark:bg-emerald-950/90 dark:text-emerald-100"
-          role="status"
-        >
-          {toast}
-        </div>
+        <FeedbackBanner type={toast.type} message={toast.message} fixed />
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -258,6 +302,12 @@ export default function InvoiceDetail() {
               {cancelMutation.isPending ? 'جاري الإلغاء…' : 'إلغاء الفاتورة'}
             </button>
           )}
+          <InvoiceReceiptPrint
+            invoice={invoice}
+            warehouseName={warehouseName ?? String(invoice.warehouse_id)}
+            barnName={barn?.name ?? null}
+            isCancelled={isCancelled}
+          />
           <button
             type="button"
             title="يُحمَّل ملف PDF ثم يُفتح واتساب ويب — أرفق الملف بزر 📎 (على الكمبيوتر)"
@@ -297,110 +347,170 @@ export default function InvoiceDetail() {
         </p>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 text-sm">
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">التاريخ</p>
-          <p className="font-medium">{formatDate(invoice.created_at)}</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-sm">
+        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">التاريخ</p>
+          <p className="font-semibold">{formatDate(invoice.created_at)}</p>
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">المخزن</p>
-          <p className="font-medium">{warehouseName ?? invoice.warehouse_id}</p>
+        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المخزن</p>
+          <p className="font-semibold">{warehouseName ?? invoice.warehouse_id}</p>
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">العنبر</p>
+        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">العنبر</p>
           {invoice.barn_id ? (
-            <p className="font-medium">
+            <p className="font-semibold flex items-center gap-2">
               {barn?.name ?? `#${invoice.barn_id}`}
               {barn && (
                 <Link
                   to={`/barns/${invoice.barn_id}`}
-                  className="mr-2 text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                  className="text-[10px] text-primary-600 dark:text-primary-400 hover:underline border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 px-1.5 py-0.5 rounded"
                 >
                   عرض العنبر
                 </Link>
               )}
             </p>
           ) : (
-            <p className="font-medium text-gray-400 dark:text-gray-500">—</p>
+            <p className="font-semibold text-gray-400 dark:text-gray-500">—</p>
           )}
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">اسم العميل</p>
-          <p className="font-medium">{invoice.customer_name}</p>
+        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">اسم العميل</p>
+          <p className="font-semibold">{invoice.customer_name}</p>
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">طريقة الدفع</p>
-          <p className="font-medium">{paymentMethodLabel(invoice.payment_method)}</p>
+        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">طريقة الدفع</p>
+          <span className={cn(
+             "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase",
+             invoice.payment_method === 'cash' ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+          )}>
+            {paymentMethodLabel(invoice.payment_method)}
+          </span>
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">المجموع</p>
-          <p className="font-bold">{formatCurrency(invoice.total_amount)}</p>
+        <div className="p-3 rounded-lg border border-primary-100 dark:border-primary-900/30 bg-primary-50/30 dark:bg-primary-900/10">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المجموع النهائي</p>
+          <p className="font-black text-primary-700 dark:text-primary-300 text-base">{formatCurrency(invoice.total_amount)}</p>
         </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">المدفوع / المتبقي</p>
-          <p className="font-medium">
-            {formatCurrency(invoice.paid_amount)} / {formatCurrency(invoice.remaining_amount)}
-          </p>
-        </div>
-        <div>
-          <p className="text-gray-500 dark:text-gray-400">الحالة</p>
-          <p className="font-medium">{invoice.status}</p>
-        </div>
+        {isInvoiceCashPayment(invoice.payment_method) ? (
+          <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
+            <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المدفوع / المتبقي</p>
+            <p className="font-semibold tabular-nums">
+              {formatCurrency(invoice.paid_amount)} / {formatCurrency(invoice.remaining_amount)}
+            </p>
+          </div>
+        ) : null}
+        {hasInvBarnBalanceSnapshot && (
+          <div className="sm:col-span-2 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 flex justify-between gap-4">
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">رصيد العنبر (قبل)</p>
+              <p className="font-semibold tabular-nums">{formatCurrency(invBarnBefore)}</p>
+            </div>
+            <ArrowRight className="w-4 h-4 text-gray-400 self-center rotate-180" />
+            <div className="text-left">
+              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">رصيد العنبر (بعد)</p>
+              <p className="font-semibold tabular-nums">{formatCurrency(invBarnAfter)}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div>
         <h2 className="text-lg font-semibold mb-3">الأصناف</h2>
-        <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden overflow-x-auto">
+        <div className="responsive-table-container">
           {!invoice.items?.length ? (
-            <p className="p-4 text-center text-gray-500 dark:text-gray-400">
-              لا توجد أصناف
+            <p className="p-8 text-center text-gray-500 dark:text-gray-400">
+              لا توجد أصناف في هذه الفاتورة.
             </p>
           ) : (
-            <table className="w-full min-w-0 text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
-                  <th className="text-right py-2 px-4">المنتج</th>
-                  <th className="text-right py-2 px-4 whitespace-nowrap">{quantityColumnHeader}</th>
-                  <th className="text-right py-2 px-4 whitespace-nowrap">سعر الوحدة</th>
-                  <th className="text-right py-2 px-4 whitespace-nowrap">الإجمالي</th>
-                  {!isCancelled && <th className="text-center py-2 px-2 w-24">مرتجع</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {invoice.items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className="border-b border-gray-100 dark:border-gray-700"
-                  >
-                    <td className="py-2 px-4 break-words">{item.product_name}</td>
-                    <td className="py-2 px-4">
-                      {item.product_unit_type === 'bulk'
-                        ? item.display_unit === 'gram' && item.display_quantity != null
-                          ? `${item.display_quantity} جرام`
-                          : `${item.quantity} كجم`
-                        : item.quantity}
-                    </td>
-                    <td className="py-2 px-4">{formatCurrency(item.unit_price)}</td>
-                    <td className="py-2 px-4 font-medium">
-                      {formatCurrency(item.total_price)}
-                    </td>
-                    {!isCancelled && (
-                      <td className="py-2 px-2 text-center">
-                        <button
-                          type="button"
-                          title="مرتجع — إرجاع للمخزن"
-                          onClick={() => openReturnModal(item)}
-                          disabled={removeItemMutation.isPending || partialReturnMutation.isPending}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 text-gray-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 dark:border-gray-600 dark:hover:bg-red-950/40 dark:hover:text-red-300 disabled:opacity-40"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </td>
-                    )}
+            <>
+              {/* Desktop View: Table */}
+              <table className="hidden sm:table responsive-table">
+                <thead>
+                  <tr>
+                    <th className="text-right">المنتج</th>
+                    <th className="text-right">{quantityColumnHeader}</th>
+                    <th className="text-right">سعر الوحدة</th>
+                    <th className="text-right">الإجمالي</th>
+                    {!isCancelled && <th className="text-center w-24">مرتجع</th>}
                   </tr>
+                </thead>
+                <tbody>
+                  {invoice.items.map((item) => (
+                    <tr key={item.id}>
+                      <td className="font-medium">{item.product_name}</td>
+                      <td className="tabular-nums">
+                        {item.product_unit_type === 'bulk'
+                          ? item.display_unit === 'gram' && item.display_quantity != null
+                            ? `${item.display_quantity} جرام`
+                            : `${item.quantity} كجم`
+                          : item.quantity}
+                      </td>
+                      <td className="tabular-nums text-gray-500">{formatCurrency(item.unit_price)}</td>
+                      <td className="tabular-nums font-bold text-gray-900 dark:text-gray-100">
+                        {formatCurrency(item.total_price)}
+                      </td>
+                      {!isCancelled && (
+                        <td className="text-center">
+                          <button
+                            type="button"
+                            title="مرتجع — إرجاع للمخزن"
+                            onClick={() => openReturnModal(item)}
+                            disabled={removeItemMutation.isPending || partialReturnMutation.isPending}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 text-gray-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200 dark:border-gray-600 dark:hover:bg-red-950/40 dark:hover:text-red-300 disabled:opacity-40 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Mobile View: Cards */}
+              <div className="sm:hidden divide-y divide-gray-100 dark:divide-gray-700">
+                {invoice.items.map((item) => (
+                  <div key={item.id} className="p-4 space-y-3">
+                    <div className="flex justify-between items-start gap-2">
+                       <p className="text-sm font-bold text-gray-900 dark:text-gray-100">
+                         {item.product_name}
+                       </p>
+                       {!isCancelled && (
+                         <button
+                           type="button"
+                           onClick={() => openReturnModal(item)}
+                           disabled={removeItemMutation.isPending || partialReturnMutation.isPending}
+                           className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-[10px] font-bold text-red-700 dark:bg-red-950/30 dark:border-red-900 dark:text-red-300"
+                         >
+                           <X className="w-3 h-3" />
+                           إرجاع
+                         </button>
+                       )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                         <p className="mobile-card-label">{quantityColumnHeader}</p>
+                         <p className="mobile-card-value">
+                            {item.product_unit_type === 'bulk'
+                              ? item.display_unit === 'gram' && item.display_quantity != null
+                                ? `${item.display_quantity} جرام`
+                                : `${item.quantity} كجم`
+                              : item.quantity}
+                         </p>
+                       </div>
+                       <div>
+                         <p className="mobile-card-label">سعر الوحدة</p>
+                         <p className="mobile-card-value">{formatCurrency(item.unit_price)}</p>
+                       </div>
+                    </div>
+                    <div className="flex justify-between items-center py-1.5 bg-gray-50 dark:bg-gray-800 px-2 rounded-lg">
+                       <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">الإجمالي:</span>
+                       <span className="text-sm font-bold text-primary-600 dark:text-primary-400">{formatCurrency(item.total_price)}</span>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </>
           )}
         </div>
       </div>

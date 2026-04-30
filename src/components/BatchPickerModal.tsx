@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import Modal from './Modal'
-import { cn, formatCurrency } from '@/lib/utils'
+import FeedbackBanner from './FeedbackBanner'
+import { cn, formatCurrency, formatExpiryMonth, formatNumber, getNearExpiryWarning } from '@/lib/utils'
 import type { ProductBatch } from '@/types/api'
 
 interface BatchPickerModalProps {
@@ -21,12 +22,22 @@ export default function BatchPickerModal({
   warehouseNames,
   onSelect,
 }: BatchPickerModalProps) {
+  const sortedBatches = useMemo(() => {
+    return [...batches].sort((a, b) => {
+      const dateA = a.expiry_date || '9999-12-31'
+      const dateB = b.expiry_date || '9999-12-31'
+      if (dateA < dateB) return -1
+      if (dateA > dateB) return 1
+      return 0
+    })
+  }, [batches])
+
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null)
   const [quantity, setQuantity] = useState(1)
   const [error, setError] = useState('')
   const confirmLockRef = useRef(false)
 
-  const defaultBatchId = batches[0]?.id
+  const defaultBatchId = sortedBatches[0]?.id
 
   useEffect(() => {
     if (!open) {
@@ -41,7 +52,11 @@ export default function BatchPickerModal({
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
-  const selectedBatch = batches.find((b) => b.id === selectedBatchId)
+  const selectedBatch = sortedBatches.find((b) => b.id === selectedBatchId)
+
+  const earliestExpiry = sortedBatches[0]?.expiry_date || '9999-12-31'
+  const isSelectingLaterBatch =
+    selectedBatch && (selectedBatch.expiry_date || '9999-12-31') > earliestExpiry
   const getBatchQty = (b: ProductBatch) =>
     b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) : (b.quantity ?? 0)
 
@@ -54,7 +69,7 @@ export default function BatchPickerModal({
     const q = Math.max(0.01, quantity)
     if (q > getBatchQty(selectedBatch)) {
       setError(
-        `الكمية المطلوبة تتجاوز المخزون المتاح في هذه الدفعة (متاح: ${selectedBatch.unit_type === 'bulk' ? getBatchQty(selectedBatch).toFixed(2) + ' كجم' : getBatchQty(selectedBatch)})`
+        `الكمية المطلوبة تتجاوز المخزون المتاح في هذه الدفعة (متاح: ${selectedBatch.unit_type === 'bulk' ? formatNumber(getBatchQty(selectedBatch), 2) + ' كجم' : formatNumber(getBatchQty(selectedBatch), 0)})`
       )
       return
     }
@@ -79,6 +94,13 @@ export default function BatchPickerModal({
           </div>
         )}
 
+        {isSelectingLaterBatch && (
+          <FeedbackBanner
+            type="warning"
+            message={getNearExpiryWarning(earliestExpiry)}
+          />
+        )}
+
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -91,7 +113,7 @@ export default function BatchPickerModal({
               </tr>
             </thead>
             <tbody>
-              {batches.map((b, idx) => {
+              {sortedBatches.map((b, idx) => {
                 const isSentinel = !b.expiry_date || b.expiry_date === '9999-12-31'
                 const isExpired =
                   !isSentinel && b.expiry_date != null && b.expiry_date < todayStr
@@ -132,7 +154,7 @@ export default function BatchPickerModal({
                         <span className="text-gray-400">بدون تاريخ</span>
                       ) : (
                         <span className={isExpired ? 'text-red-600 dark:text-red-400 font-medium' : ''}>
-                          {b.expiry_date}
+                          {formatExpiryMonth(b.expiry_date)}
                           {isExpired && (
                             <span className="mr-1 text-xs bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded-full">
                               منتهي
@@ -146,7 +168,7 @@ export default function BatchPickerModal({
                         </span>
                       )}
                     </td>
-                    <td className="py-2 px-3 font-medium">{b.unit_type === "bulk" ? `${(b.kg_remaining ?? 0).toFixed(2)} كجم` : b.quantity}</td>
+                    <td className="py-2 px-3 font-medium">{b.unit_type === "bulk" ? `${formatNumber(b.kg_remaining ?? 0, 2)} كجم` : formatNumber(b.quantity ?? 0, 0)}</td>
                     <td className="py-2 px-3">
                       {b.selling_price != null && b.selling_price > 0
                         ? formatCurrency(b.selling_price)
@@ -172,7 +194,7 @@ export default function BatchPickerModal({
               setQuantity(v)
               if (selectedBatch && v > getBatchQty(selectedBatch)) {
                 setError(
-                  `الكمية المطلوبة تتجاوز المخزون المتاح في هذه الدفعة (متاح: ${selectedBatch.unit_type === 'bulk' ? getBatchQty(selectedBatch).toFixed(2) + ' كجم' : getBatchQty(selectedBatch)})`
+                  `الكمية المطلوبة تتجاوز المخزون المتاح في هذه الدفعة (متاح: ${selectedBatch.unit_type === 'bulk' ? formatNumber(getBatchQty(selectedBatch), 2) + ' كجم' : formatNumber(getBatchQty(selectedBatch), 0)})`
                 )
               } else {
                 setError('')
@@ -188,7 +210,7 @@ export default function BatchPickerModal({
           />
           {selectedBatch && (
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              الحد الأقصى: {selectedBatch.unit_type === 'bulk' ? `${(selectedBatch.kg_remaining ?? 0).toFixed(2)} كجم` : `${selectedBatch.quantity} وحدة`}
+              الحد الأقصى: {selectedBatch.unit_type === 'bulk' ? `${formatNumber(selectedBatch.kg_remaining ?? 0, 2)} كجم` : `${formatNumber(selectedBatch.quantity ?? 0, 0)} وحدة`}
             </p>
           )}
         </div>

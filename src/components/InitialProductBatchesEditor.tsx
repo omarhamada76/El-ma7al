@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import type { InitialBatchEntry } from '@/api/products'
+import { fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
 
 export type InitialBatchUiRow = {
   key: string
@@ -42,10 +43,7 @@ export function buildInitialBatchesPayload(
   unitType: 'piece' | 'bulk',
   defaultBagWeightKg: number | null
 ): { ok: true; batches: InitialBatchEntry[] } | { ok: false; error: string } {
-  const normExp = (s: string) => {
-    const t = s.trim()
-    return t === '' ? null : t
-  }
+  const normExp = (s: string) => fromMonthInputValue(toMonthInputValue(s))
 
   const filled = rows.filter((r) => r.warehouse_id !== '' && Number.isInteger(Number(r.warehouse_id)))
   if (filled.length === 0) {
@@ -245,9 +243,9 @@ export default function InitialProductBatchesEditor({
                 <div>
                   <label className="block text-xs font-medium mb-0.5">تاريخ الصلاحية *</label>
                   <input
-                    type="date"
-                    value={r.expiry_date}
-                    onChange={(e) => updateRow(r.key, { expiry_date: e.target.value })}
+                    type="month"
+                    value={toMonthInputValue(r.expiry_date)}
+                    onChange={(e) => updateRow(r.key, { expiry_date: fromMonthInputValue(e.target.value) ?? '' })}
                     className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
                   />
                 </div>

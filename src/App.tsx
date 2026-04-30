@@ -16,17 +16,21 @@ import Suppliers from '@/pages/Suppliers'
 import SupplierDetail from '@/pages/SupplierDetail'
 import SupplierPurchaseNew from '@/pages/SupplierPurchaseNew'
 import ReceiptNew from '@/pages/ReceiptNew'
+import TransferToShobra from '@/pages/TransferToShobra'
+import TransferHistory from '@/pages/TransferHistory'
 import SupplierPaymentNew from '@/pages/SupplierPaymentNew'
 import Safe from '@/pages/Safe'
 import InvoiceNew from '@/pages/InvoiceNew'
 import Invoices from '@/pages/Invoices'
 import InvoiceDetail from '@/pages/InvoiceDetail'
 import PaymentNew from '@/pages/PaymentNew'
+import PaymentDetail from '@/pages/PaymentDetail'
 import Payments from '@/pages/Payments'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Users from '@/pages/Users'
 import Invoice from '@/pages/Invoice'
+import ReturnNew from '@/pages/ReturnNew'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token)
@@ -102,6 +106,8 @@ function App() {
           }
         />
         <Route path="/receipt/new" element={<ReceiptNew />} />
+        <Route path="/transfer-to-shobra" element={<TransferToShobra />} />
+        <Route path="/transfer-history" element={<TransferHistory />} />
         <Route
           path="/supplier-payments/new"
           element={
@@ -123,7 +129,9 @@ function App() {
         <Route path="/invoices/:id/edit" element={<InvoiceNew />} />
         <Route path="/invoices" element={<Invoices />} />
         <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        <Route path="/returns/new" element={<ReturnNew />} />
         <Route path="/payments/new" element={<PaymentNew />} />
+        <Route path="/payments/:id" element={<PaymentDetail />} />
         <Route path="/payments" element={<Payments />} />
         <Route
           path="/reports"

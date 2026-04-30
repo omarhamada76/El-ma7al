@@ -1,26 +1,60 @@
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, FileSpreadsheet } from 'lucide-react'
-import { getBarn } from '@/api/barns'
+import { ArrowRight, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react'
+import { getBarn, updateBarn, deleteBarn } from '@/api/barns'
 import { getBarnBillingCycles, startBarnBillingCycle, endBarnBillingCycle } from '@/api/barnBillingCycles'
+import AddBarnModal from '@/components/AddBarnModal'
 import { formatCurrency, localISODate } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
 
 export default function BarnDetail() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const showFinancials = canViewFinancials(useAuthStore((s) => s.user?.role))
   const [cycleStartDate, setCycleStartDate] = useState(() => localISODate())
   const [cycleEndDate, setCycleEndDate] = useState(() => localISODate())
   const [cycleNotice, setCycleNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
 
   const { data: barn, isLoading } = useQuery({
     queryKey: ['barn', id],
     queryFn: () => getBarn(id!),
     enabled: !!id,
   })
+
+  const updateBarnMutation = useMutation({
+    mutationFn: (body: { name: string; initial_debt: number }) => updateBarn(id!, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['barn', id] })
+      if (barn?.client_id) {
+        queryClient.invalidateQueries({ queryKey: ['client', barn.client_id, 'barns'] })
+      }
+      setEditOpen(false)
+    },
+  })
+
+  const deleteBarnMutation = useMutation({
+    mutationFn: () => deleteBarn(id!),
+    onSuccess: () => {
+      if (barn?.client_id) {
+        queryClient.invalidateQueries({ queryKey: ['client', barn.client_id, 'barns'] })
+        navigate(`/clients/${barn.client_id}`)
+      } else {
+        navigate('/')
+      }
+    },
+  })
+
+  const handleDeleteBarn = () => {
+    if (window.confirm('هل أنت متأكد من حذف هذا العنبر؟')) {
+      deleteBarnMutation.mutate()
+    }
+  }
+
+
 
   const {
     data: cyclesPayload,
@@ -81,22 +115,57 @@ export default function BarnDetail() {
       </div>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl font-bold">{barn.name}</h1>
-        {showFinancials && (
-          <Link
-            to={`/barns/${id}/account-statement`}
+        <div className="flex flex-wrap gap-2">
+          {showFinancials && (
+            <Link
+              to={`/barns/${id}/account-statement`}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 font-medium text-sm"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              كشف حساب العنبر
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 font-medium text-sm"
           >
-            <FileSpreadsheet className="w-4 h-4" />
-            كشف حساب العنبر
-          </Link>
-        )}
+            <Pencil className="w-4 h-4" />
+            تعديل
+          </button>
+          <button
+            type="button"
+            onClick={handleDeleteBarn}
+            disabled={deleteBarnMutation.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 font-medium text-sm disabled:opacity-50"
+          >
+            <Trash2 className="w-4 h-4" />
+            حذف
+          </button>
+        </div>
       </div>
+      
+      <AddBarnModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        hideInitialDebt={!showFinancials}
+        initialValues={{
+          name: barn.name,
+          initial_debt: barn.initial_debt || 0,
+        }}
+        onSubmit={async (data) => {
+          await updateBarnMutation.mutateAsync({
+            name: data.name,
+            ...(showFinancials ? { initial_debt: data.initial_debt } : {}),
+          } as any)
+        }}
+      />
 
       {showFinancials && (
       <div className="p-4 rounded-xl border border-primary-200 dark:border-primary-800 bg-primary-50/50 dark:bg-primary-950/20">
         <h2 className="text-lg font-semibold mb-2">الدورة المحاسبية</h2>
         <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-          عند بدء دورة يُحفظ تاريخ البداية، وتُسجَّل فواتير ودفعات هذا العنبر ضمن الدورة المفتوحة. عند الإغلاق يُحتسب
+          عند بدء دورة يُحفظ تاريخ البداية، وتُسجَّل فواتير وسداد هذا العنبر ضمن الدورة المفتوحة. عند الإغلاق يُحتسب
           الرصيد الختامي؛ المبلغ غير المسوّى يُعرض كمديونية متراكمة في بداية الدورة التالية عند بدئها.
         </p>
         {cyclesQueryError && (
@@ -213,7 +282,7 @@ export default function BarnDetail() {
       </div>
       )}
 
-      <div className="grid sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
           <p className="text-sm text-gray-500 dark:text-gray-400">إجمالي الفواتير</p>
           <p className="text-xl font-bold mt-1">{barn.total_invoices}</p>
@@ -226,10 +295,32 @@ export default function BarnDetail() {
             </p>
           </div>
         )}
+        {showFinancials && (
+          <>
+            <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <p className="text-sm text-gray-500 dark:text-gray-400">الحساب</p>
+              <p className="text-xl font-bold mt-1 text-gray-900 dark:text-white">
+                {formatCurrency(barn.total_account)}
+              </p>
+            </div>
+            <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <p className="text-sm text-gray-500 dark:text-gray-400">السداد</p>
+              <p className="text-xl font-bold mt-1 text-blue-600 dark:text-blue-400">
+                {formatCurrency(barn.total_paid)}
+              </p>
+            </div>
+            <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+              <p className="text-sm text-gray-500 dark:text-gray-400">المديونية</p>
+              <p className="text-xl font-bold mt-1 text-red-600 dark:text-red-400">
+                {formatCurrency(barn.balance)}
+              </p>
+            </div>
+          </>
+        )}
       </div>
       {showFinancials && (
         <p className="text-gray-500 dark:text-gray-400">
-          قائمة الفواتير والمدفوعات لهذا العنبر يمكن عرضها من كشف الحساب أو سجل الفواتير.
+          قائمة الفواتير والسداد لهذا العنبر يمكن عرضها من كشف الحساب أو سجل الفواتير.
         </p>
       )}
     </div>

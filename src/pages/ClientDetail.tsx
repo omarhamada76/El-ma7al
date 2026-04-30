@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileSpreadsheet, Phone, MessageCircle, Plus, ArrowRight, Pencil, Trash2 } from 'lucide-react'
 import { getClient, getClientBarns, getClientBalance, updateClient, deleteClient } from '@/api/clients'
-import { createBarn } from '@/api/barns'
+import { createBarn, updateBarn } from '@/api/barns'
 import { formatCurrency } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddBarnModal from '@/components/AddBarnModal'
@@ -26,6 +26,16 @@ export default function ClientDetail() {
     },
   })
   const [addBarnOpen, setAddBarnOpen] = useState(false)
+  const [editBarn, setEditBarn] = useState<{ id: number; name: string; initial_debt: number } | null>(null)
+  
+  const updateBarnMutation = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: { name: string; initial_debt: number } }) =>
+      updateBarn(String(id), body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id, 'barns'] })
+      queryClient.invalidateQueries({ queryKey: ['client', id, 'balance'] }) // Aggregation might change
+    },
+  })
   const updateClientMutation = useMutation({
     mutationFn: (body: Parameters<typeof updateClient>[1]) => updateClient(id!, body),
     onSuccess: () => {
@@ -60,7 +70,11 @@ export default function ClientDetail() {
     enabled: !!id && showFinancials,
   })
 
-  const balance = balanceData?.balance ?? client?.initial_debt ?? 0
+  const stats = balanceData ?? {
+    total_account: client?.initial_debt ?? 0,
+    total_paid: 0,
+    balance: client?.initial_debt ?? 0,
+  }
 
   if (!id) return null
   if (isLoading || !client)
@@ -142,16 +156,32 @@ export default function ClientDetail() {
       />
 
       {showFinancials && (
-        <div className="grid sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-            <p className="text-sm text-gray-500 dark:text-gray-400">إجمالي حساب العميل</p>
-            <p className="text-2xl font-bold mt-1">{formatCurrency(balance)}</p>
-            <Link
-              to={`/payments/new?client_id=${encodeURIComponent(id ?? '')}`}
-              className="inline-flex items-center gap-1 mt-2 text-sm text-primary-600 dark:text-primary-400 hover:underline"
-            >
-              <Plus className="w-4 h-4" /> تسجيل دفعة
-            </Link>
+            <p className="text-sm text-gray-500 dark:text-gray-400">حساب العميل (إجمالي المسحوبات)</p>
+            <p className="text-2xl font-bold mt-1">{formatCurrency(stats.total_account)}</p>
+          </div>
+          <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            <p className="text-sm text-gray-500 dark:text-gray-400">إجمالي السداد</p>
+            <p className="text-2xl font-bold mt-1 text-blue-600 dark:text-blue-400">{formatCurrency(stats.total_paid)}</p>
+          </div>
+          <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 relative group">
+            <p className="text-sm text-gray-500 dark:text-gray-400">المديونية (المبلغ المتبقي)</p>
+            <p className="text-2xl font-bold mt-1 text-red-600 dark:text-red-400">{formatCurrency(stats.balance)}</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+              <Link
+                to={`/payments/new?client_id=${encodeURIComponent(id ?? '')}`}
+                className="inline-flex items-center gap-1 text-sm text-primary-600 dark:text-primary-400 hover:underline"
+              >
+                <Plus className="w-4 h-4" /> تسجيل سداد
+              </Link>
+              <Link
+                to={`/payments/new?client_id=${encodeURIComponent(id ?? '')}&method=discount`}
+                className="inline-flex items-center gap-1 text-sm text-amber-600 dark:text-amber-500 hover:underline"
+              >
+                <Plus className="w-4 h-4" /> تسجيل خصم
+              </Link>
+            </div>
           </div>
           <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
             <p className="text-sm text-gray-500 dark:text-gray-400">إجمالي الربح من العميل</p>
@@ -167,7 +197,7 @@ export default function ClientDetail() {
             to={`/payments/new?client_id=${encodeURIComponent(id ?? '')}`}
             className="inline-flex items-center gap-2 text-primary-600 dark:text-primary-400 font-medium hover:underline"
           >
-            <Plus className="w-4 h-4" /> تسجيل دفعة عميل
+            <Plus className="w-4 h-4" /> تسجيل سداد عميل
           </Link>
         </div>
       )}
@@ -184,11 +214,21 @@ export default function ClientDetail() {
           </button>
         </div>
         <AddBarnModal
-          open={addBarnOpen}
-          onClose={() => setAddBarnOpen(false)}
+          open={addBarnOpen || !!editBarn}
+          onClose={() => {
+            setAddBarnOpen(false)
+            setEditBarn(null)
+          }}
+          initialValues={editBarn}
           hideInitialDebt={!showFinancials}
           onSubmit={async (d) => {
-            await createBarnMutation.mutateAsync({ name: d.name, initial_debt: d.initial_debt })
+            if (editBarn) {
+              await updateBarnMutation.mutateAsync({ id: editBarn.id, body: d })
+              setEditBarn(null)
+            } else {
+              await createBarnMutation.mutateAsync({ name: d.name, initial_debt: d.initial_debt })
+              setAddBarnOpen(false)
+            }
           }}
         />
         {barns.length === 0 ? (
@@ -198,12 +238,12 @@ export default function ClientDetail() {
         ) : (
           <ul className="grid sm:grid-cols-2 gap-3">
             {barns.map((barn) => (
-              <li key={barn.id}>
+              <li key={barn.id} className="relative group">
                 <Link
                   to={`/barns/${barn.id}`}
                   className={cn(
                     'block p-4 rounded-xl border border-gray-200 dark:border-gray-700',
-                    'bg-white dark:bg-gray-800 hover:border-primary-500 transition-colors'
+                    'bg-white dark:bg-gray-800 hover:border-primary-500 transition-colors h-full'
                   )}
                 >
                   <div className="flex items-center justify-between">
@@ -212,9 +252,38 @@ export default function ClientDetail() {
                   </div>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                     إجمالي الفواتير: {barn.total_invoices}
-                    {showFinancials && ` — ربح: ${formatCurrency(barn.total_profit)}`}
+                    {showFinancials && (
+                      <>
+                        <span className="block mt-1 text-emerald-600 dark:text-emerald-400 text-xs text-left">
+                          الربح: {formatCurrency(barn.total_profit)}
+                        </span>
+                        <span className="block mt-0.5 space-x-2 space-x-reverse text-[10px] leading-tight opacity-80 text-left">
+                          <span className="text-gray-600 dark:text-gray-300">الحساب: {formatCurrency(barn.total_account)}</span>
+                          <span>•</span>
+                          <span className="text-blue-600 dark:text-blue-400">السداد: {formatCurrency(barn.total_paid)}</span>
+                          <span>•</span>
+                          <span className="text-red-600 dark:text-red-400">المديونية: {formatCurrency(barn.balance)}</span>
+                        </span>
+                      </>
+                    )}
                   </p>
                 </Link>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setEditBarn({
+                      id: barn.id,
+                      name: barn.name,
+                      initial_debt: barn.initial_debt ?? 0,
+                    })
+                  }}
+                  className="absolute left-3 top-10 p-2 rounded-lg bg-white/80 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:text-primary-600"
+                  title="تعديل العنبر"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
               </li>
             ))}
           </ul>

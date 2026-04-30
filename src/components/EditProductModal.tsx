@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import Modal from './Modal'
+import ProductImageField from './ProductImageField'
 import type { Product, ProductBatch } from '@/types/api'
 import type { WarehouseOption } from './AddProductModal'
 import InitialProductBatchesEditor, {
@@ -18,7 +19,7 @@ import {
   seedInitialBulkStockForProduct,
   type InitialBatchEntry,
 } from '@/api/products'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatExpiryMonth, formatNumber, fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
 
 const OTHER_CATEGORY = '__other__'
 
@@ -27,12 +28,11 @@ function isSentinelExpiry(exp: string | null | undefined): boolean {
 }
 
 function expiryToInputValue(exp: string | null | undefined): string {
-  return isSentinelExpiry(exp) ? '' : exp!
+  return isSentinelExpiry(exp) ? '' : toMonthInputValue(exp)
 }
 
 function inputValueToExpiry(v: string): string | null {
-  const t = v.trim()
-  return t === '' ? null : t
+  return fromMonthInputValue(v)
 }
 
 export type EditProductModalProps = {
@@ -85,6 +85,7 @@ export default function EditProductModal({
   const [originalUnitType, setOriginalUnitType] = useState<'piece' | 'bulk'>('piece')
   /** New opening batches when there are no server batches yet (piece or bulk). */
   const [initialBatchRows, setInitialBatchRows] = useState<InitialBatchUiRow[]>([])
+  const [imageUrl, setImageUrl] = useState<string | null>(null)
   const batchDraftResetRef = useRef<{ open: boolean; productId: number | null }>({
     open: false,
     productId: null,
@@ -123,6 +124,7 @@ export default function EditProductModal({
     setBagWeightKg(product.bag_weight_kg ?? '')
     setPurchasePrice(product.purchase_price ?? 0)
     setSellingPrice(product.selling_price ?? 0)
+    setImageUrl(product.image_url ?? null)
     setAdvancedOpen(false)
     setProductError('')
   }, [open, product, categoryOptions])
@@ -229,6 +231,7 @@ export default function EditProductModal({
         bag_weight_kg: bag_weight_kg === '' ? null : Number(bag_weight_kg),
         purchase_price,
         selling_price,
+        image_url: imageUrl,
       })
       if (seedBatches && seedBatches.length > 0) {
         await seedInitialBulkStockForProduct(productId, { initial_batches: seedBatches })
@@ -295,6 +298,12 @@ export default function EditProductModal({
               className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
             />
           </div>
+          <ProductImageField
+            imageUrl={imageUrl}
+            onImageUrlChange={setImageUrl}
+            onError={setProductError}
+            hint="تُعرض في قائمة المخزون بجانب الاسم."
+          />
           <div>
             <label className="block text-sm font-medium mb-1">الفئة</label>
             {categoryOptions.length > 0 ? (
@@ -768,9 +777,7 @@ function BatchRow({
         return
       }
       if (q < soldU) {
-        window.alert(
-          `لا يمكن تقليل الكمية إلى أقل من الكمية المباعة (${soldU} وحدة)`
-        )
+        setRowErr(`لا يمكن تقليل الكمية إلى أقل من الكمية المباعة (${soldU} وحدة)`)
         return
       }
     } else {
@@ -814,7 +821,7 @@ function BatchRow({
       return
     }
     if (!canDelete) {
-      window.alert('لا يمكن الحذف — المخزون غير صفر (يتطلب صلاحية مدير أعلى)')
+      setRowErr('لا يمكن الحذف — المخزون غير صفر (يتطلب صلاحية مدير أعلى)')
       return
     }
     setSaving(true)
@@ -834,6 +841,11 @@ function BatchRow({
   const originalExpiryInput = expiryToInputValue(batch.expiry_date)
   const expiryChanged =
     inputValueToExpiry(expiryInput) !== inputValueToExpiry(originalExpiryInput)
+  const qtyChanged = Math.floor(Number(qty)) !== Math.floor(Number(batch.quantity ?? 0))
+  const kgChanged = Number(kgRem) !== Number(batch.kg_remaining ?? 0)
+  const ppChanged = (pp === '' ? null : Number(pp)) !== (batch.purchase_price == null ? null : Number(batch.purchase_price))
+  const spChanged = (sp === '' ? null : Number(sp)) !== (batch.selling_price == null ? null : Number(batch.selling_price))
+  const hasDirtyChanges = expiryChanged || qtyChanged || kgChanged || ppChanged || spChanged
 
   return (
     <tr
@@ -846,7 +858,7 @@ function BatchRow({
         {canManage ? (
           <div>
             <input
-              type="date"
+              type="month"
               value={expiryInput}
               onChange={(e) => setExpiryInput(e.target.value)}
               onBlur={() => {
@@ -866,7 +878,7 @@ function BatchRow({
           <span className="text-gray-400">بدون تاريخ</span>
         ) : (
           <span className={isExpired ? 'text-red-600 font-medium' : ''}>
-            {batch.expiry_date}
+            {formatExpiryMonth(batch.expiry_date)}
             {isExpired && (
               <span className="mr-1 text-xs bg-red-100 dark:bg-red-900/40 px-1 rounded">منتهي</span>
             )}
@@ -875,8 +887,8 @@ function BatchRow({
       </td>
       {productUnitBulk ? (
         <>
-          <td className="py-2 px-2 align-top font-medium">{batch.bag_count ?? batch.quantity ?? '—'}</td>
-          <td className="py-2 px-2 align-top">{batch.kg_per_bag ?? '—'}</td>
+          <td className="py-2 px-2 align-top font-medium">{formatNumber(batch.bag_count ?? batch.quantity ?? 0, 2)}</td>
+          <td className="py-2 px-2 align-top">{batch.kg_per_bag != null ? formatNumber(batch.kg_per_bag, 2) : '—'}</td>
           <td className="py-2 px-2 align-top">
             {canManage ? (
               <div>
@@ -886,6 +898,9 @@ function BatchRow({
                   step="0.001"
                   value={kgRem}
                   onChange={(e) => setKgRem(e.target.value)}
+                  onBlur={() => {
+                    if (!saving && hasDirtyChanges) void handleSave()
+                  }}
                   className="w-20 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
                 />
                 <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5 max-w-[8rem]">
@@ -893,7 +908,7 @@ function BatchRow({
                 </p>
               </div>
             ) : (
-              batch.kg_remaining ?? '—'
+              batch.kg_remaining != null ? formatNumber(batch.kg_remaining, 2) : '—'
             )}
           </td>
           <td className="py-2 px-2 align-top">
@@ -904,6 +919,9 @@ function BatchRow({
                 step={0.01}
                 value={pp}
                 onChange={(e) => setPp(e.target.value)}
+                onBlur={() => {
+                  if (!saving && hasDirtyChanges) void handleSave()
+                }}
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
@@ -918,6 +936,9 @@ function BatchRow({
                 step={0.01}
                 value={sp}
                 onChange={(e) => setSp(e.target.value)}
+                onBlur={() => {
+                  if (!saving && hasDirtyChanges) void handleSave()
+                }}
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
@@ -936,6 +957,9 @@ function BatchRow({
                   step={1}
                   value={qty}
                   onChange={(e) => setQty(e.target.value)}
+                  onBlur={() => {
+                    if (!saving && hasDirtyChanges) void handleSave()
+                  }}
                   className="w-16 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
                 />
                 {soldU > 0 && (
@@ -944,9 +968,9 @@ function BatchRow({
               </div>
             ) : (
               <>
-                {batch.quantity}
+                {formatNumber(batch.quantity, 2)}
                 {soldU > 0 && (
-                  <span className="block text-[10px] text-gray-500">مباع: {soldU}</span>
+                  <span className="block text-[10px] text-gray-500">مباع: {formatNumber(soldU, 2)}</span>
                 )}
               </>
             )}
@@ -959,6 +983,9 @@ function BatchRow({
                 step={0.01}
                 value={pp}
                 onChange={(e) => setPp(e.target.value)}
+                onBlur={() => {
+                  if (!saving && hasDirtyChanges) void handleSave()
+                }}
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
@@ -973,6 +1000,9 @@ function BatchRow({
                 step={0.01}
                 value={sp}
                 onChange={(e) => setSp(e.target.value)}
+                onBlur={() => {
+                  if (!saving && hasDirtyChanges) void handleSave()
+                }}
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
@@ -1091,7 +1121,7 @@ function NewBatchForm({
         <div>
           <label className="block text-xs mb-0.5">تاريخ الصلاحية</label>
           <input
-            type="date"
+            type="month"
             value={expiryInput}
             onChange={(e) => setExpiryInput(e.target.value)}
             className="w-full px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"

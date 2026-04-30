@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { getUsers, createUser, updateUser, deleteUser } from '@/api/users'
 import type { User } from '@/types/api'
 import { useAuthStore } from '@/stores/auth'
 import UserFormModal from '@/components/UserFormModal'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
 
 const roleLabels: Record<string, string> = {
   staff: 'موظف',
@@ -20,6 +22,8 @@ export default function Users() {
   const [formOpen, setFormOpen] = useState(false)
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create')
   const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [userCelebrate, setUserCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['users'],
@@ -31,6 +35,10 @@ export default function Users() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] })
       setFormOpen(false)
+      setUserCelebrate({ title: 'تم إنشاء المستخدم بنجاح', subtitle: 'يمكنك المتابعة من القائمة' })
+    },
+    onError: (err: Error) => {
+      setErrorMessage(err.message || 'تعذر إنشاء المستخدم')
     },
   })
 
@@ -46,6 +54,10 @@ export default function Users() {
       queryClient.invalidateQueries({ queryKey: ['users'] })
       setFormOpen(false)
       setEditingUser(null)
+      setUserCelebrate({ title: 'تم تحديث المستخدم بنجاح' })
+    },
+    onError: (err: Error) => {
+      setErrorMessage(err.message || 'تعذر تحديث المستخدم')
     },
   })
 
@@ -53,17 +65,32 @@ export default function Users() {
     mutationFn: deleteUser,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] })
+      setUserCelebrate({ title: 'تم حذف المستخدم بنجاح' })
     },
     onError: (err: Error) => {
-      alert(err.message || 'فشل الحذف')
+      setErrorMessage(err.message || 'تعذر حذف المستخدم')
     },
   })
 
   const users = data?.data ?? []
   const pending = createMutation.isPending || updateMutation.isPending
 
+  useEffect(() => {
+    if (!errorMessage) return
+    const t = window.setTimeout(() => setErrorMessage(null), 4500)
+    return () => window.clearTimeout(t)
+  }, [errorMessage])
+
   return (
     <div className="space-y-6" dir="rtl">
+      <SuccessOverlay
+        open={!!userCelebrate}
+        title={userCelebrate?.title ?? ''}
+        subtitle={userCelebrate?.subtitle}
+        durationMs={1500}
+        onComplete={() => setUserCelebrate(null)}
+      />
+      {errorMessage && <FeedbackBanner type="error" message={errorMessage} />}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">إدارة المستخدمين</h1>
@@ -106,14 +133,14 @@ export default function Users() {
             لا يوجد مستخدمون.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="responsive-table-container">
+            <table className="responsive-table min-w-0">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
                   <th className="text-right py-3 px-4">البريد</th>
                   <th className="text-right py-3 px-4">الاسم</th>
                   <th className="text-right py-3 px-4">الدور</th>
-                  <th className="text-right py-3 px-4">الحالة</th>
+                  <th className="text-right py-3 px-4 hidden sm:table-cell">الحالة</th>
                   <th className="text-right py-3 px-4 w-28">إجراءات</th>
                 </tr>
               </thead>

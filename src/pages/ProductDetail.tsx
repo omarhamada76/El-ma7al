@@ -1,11 +1,11 @@
 import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Pencil, Trash2 } from 'lucide-react'
+import { ArrowRight, Package, Pencil, Trash2 } from 'lucide-react'
 import { getProduct, getProductStock, getProductBatches, getProductBags, deleteProduct } from '@/api/products'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions } from '@/api/categories'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatExpiryMonth, formatNumber } from '@/lib/utils'
 import ProductLabelPrint from '@/components/ProductLabelPrint'
 import type { ProductBatch, BagInstance } from '@/types/api'
 import EditProductModal from '@/components/EditProductModal'
@@ -29,6 +29,7 @@ export default function ProductDetail() {
   const role = useAuthStore((s) => s.user?.role)
   const canEditBatches = canManageProductBatches(role)
   const isSuperAdmin = role === 'super_admin'
+
   const { data: product, isLoading } = useQuery({
     queryKey: ['product', id],
     queryFn: () => getProduct(id!),
@@ -57,6 +58,7 @@ export default function ProductDetail() {
     queryKey: ['categories', 'options'],
     queryFn: getCategoryOptions,
   })
+
   const deleteMutation = useMutation({
     mutationFn: () => deleteProduct(id!),
     onSuccess: () => {
@@ -68,28 +70,46 @@ export default function ProductDetail() {
       navigate('/inventory')
     },
   })
+
   const handleDelete = () => {
     if (window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) deleteMutation.mutate()
   }
-
-  // Total quantity across all batches
-  const totalBatchQty = useMemo(
-    () => batches.reduce((sum, b) => sum + (b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) : (b.quantity ?? 0)), 0),
-    [batches]
-  )
-
-  // Detect expired batches
-  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
   const warehouseNames = useMemo(
     () => Object.fromEntries(warehouses.map((w) => [w.id, w.name_ar])),
     [warehouses]
   )
 
+
+
+  const filteredStock = useMemo(
+    () => stock.filter((s) => Number(s.warehouse_id) === 1 && s.quantity > 0),
+    [stock]
+  )
+
+  const filteredBatches = useMemo(
+    () => batches.filter((b) => Number(b.warehouse_id) === 1 && (product?.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0)),
+    [batches, product?.unit_type]
+  )
+
+  const filteredBags = useMemo(
+    () => bags.filter((b) => Number(b.warehouse_id) === 1 && b.kg_remaining > 0),
+    [bags]
+  )
+
+  // Total quantity across filtered batches
+  const totalBatchQty = useMemo(
+    () => filteredBatches.reduce((sum, b) => sum + (b.unit_type === 'bulk' ? (b.kg_remaining ?? 0) : (b.quantity ?? 0)), 0),
+    [filteredBatches]
+  )
+
+  // Detect expired batches
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
+
   const bulkWarehouseCards = useMemo(() => {
     if (product?.unit_type !== 'bulk') return []
     const byWh = new Map<number, BagInstance[]>()
-    for (const b of bags) {
+    for (const b of filteredBags) {
       const arr = byWh.get(b.warehouse_id) ?? []
       arr.push(b)
       byWh.set(b.warehouse_id, arr)
@@ -116,7 +136,7 @@ export default function ProductDetail() {
       })
     }
     return out
-  }, [bags, product?.unit_type, warehouseNames])
+  }, [filteredBags, product?.unit_type, warehouseNames])
 
   if (!id || id === 'new') {
     return (
@@ -178,7 +198,34 @@ export default function ProductDetail() {
           queryClient.invalidateQueries({ queryKey: ['product', id] })
         }}
       />
-      <h1 className="text-xl sm:text-2xl font-bold">{product.name}</h1>
+      <div className="flex flex-col sm:flex-row gap-5 sm:gap-6 sm:items-start">
+        <div className="shrink-0 flex justify-center sm:justify-start">
+          {product.image_url ? (
+            <img
+              src={product.image_url}
+              alt={product.name}
+              loading="eager"
+              decoding="async"
+              className="w-full max-w-[220px] aspect-square object-cover rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-sm"
+            />
+          ) : (
+            <div
+              className="flex aspect-square w-full max-w-[220px] items-center justify-center rounded-xl border border-dashed border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/40 text-gray-400"
+              aria-hidden
+            >
+              <Package className="h-16 w-16 sm:h-20 sm:w-20 opacity-60" />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1 space-y-1 text-center sm:text-start">
+          <h1 className="text-xl sm:text-2xl font-bold">{product.name}</h1>
+          {!product.image_url && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              لا توجد صورة — أضفها من «تعديل»
+            </p>
+          )}
+        </div>
+      </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
@@ -221,7 +268,7 @@ export default function ProductDetail() {
                         <div className="flex justify-between text-sm mb-1">
                           <span className="text-gray-600 dark:text-gray-400">متبقي</span>
                           <span className="font-bold tabular-nums">
-                            {b.kg_remaining.toFixed(2)} كيلو ({pct}% من {b.kg_total.toFixed(1)} كيلو)
+                            {formatNumber(b.kg_remaining, 2)} كيلو ({pct}% من {formatNumber(b.kg_total, 1)} كيلو)
                           </span>
                         </div>
                         <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
@@ -232,7 +279,7 @@ export default function ProductDetail() {
                         </div>
                       </div>
                       <p className="text-sm text-gray-600 dark:text-gray-400">
-                        الصلاحية: {b.expiry_date ?? '—'} · دفعة #{b.batch_id}
+                        الصلاحية: {formatExpiryMonth(b.expiry_date)} · دفعة #{b.batch_id}
                       </p>
                     </>
                   ) : (
@@ -240,7 +287,7 @@ export default function ProductDetail() {
                   )}
                   <p className="text-sm border-t border-gray-100 dark:border-gray-700 pt-2">
                     في الانتظار: <strong>{c.sealedCount}</strong> شكارة مغلقة · إجمالي المخزون في المخزن:{' '}
-                    <strong>{c.totalKg.toFixed(2)} كيلو</strong>
+                    <strong>{formatNumber(c.totalKg, 2)} كيلو</strong>
                   </p>
                 </div>
               )
@@ -267,13 +314,13 @@ export default function ProductDetail() {
 
       <div>
         <h2 className="text-lg font-semibold mb-3">المخزون حسب المخزن</h2>
-        {stock.length === 0 ? (
+        {filteredStock.length === 0 ? (
           <p className="text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
             لا يوجد مخزون مسجّل. استلم من مورد أو قم بتعديل يدوي.
           </p>
         ) : (
           <ul className="flex flex-wrap gap-3">
-            {stock.map((s) => (
+            {filteredStock.map((s) => (
               <li
                 key={`${s.product_id}-${s.warehouse_id}`}
                 className="px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center gap-2"
@@ -281,7 +328,7 @@ export default function ProductDetail() {
                 <span className="font-medium">
                   {warehouseNames[s.warehouse_id] ?? `مخزن ${s.warehouse_id}`}
                 </span>
-                : <span className="font-bold">{product?.unit_type === 'bulk' ? `${s.quantity.toFixed(2)} كجم` : s.quantity}</span>
+                : <span className="font-bold">{product?.unit_type === 'bulk' ? `${formatNumber(s.quantity, 2)} كجم` : formatNumber(s.quantity, 0)}</span>
                 <button
                   type="button"
                   onClick={() =>
@@ -301,18 +348,18 @@ export default function ProductDetail() {
         )}
       </div>
 
-            {product.unit_type === 'bulk' && (
+      {product.unit_type === 'bulk' && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-semibold">تتبع الشكاير (حسب المخزن وتاريخ الصلاحية)</h2>
           </div>
-          {bags.length === 0 ? (
+          {filteredBags.length === 0 ? (
             <p className="text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
               لا توجد شكاير مسجلة لهذا المنتج.
             </p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {bags.map(b => (
+              {filteredBags.map(b => (
                 <div key={b.id} className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col gap-2">
                   <div className="flex justify-between items-start">
                     <span className="font-bold text-lg text-primary-600">شكارة #{b.bag_number}</span>
@@ -321,12 +368,17 @@ export default function ProductDetail() {
                     </span>
                   </div>
                   <div className="text-sm">المخزن: {b.warehouse_name_ar || `مخزن ${b.warehouse_id}`}</div>
-                  <div className="text-sm">الصلاحية: {b.expiry_date || 'غير محدد'}</div>
+                  <div className="text-sm">الصلاحية: {formatExpiryMonth(b.expiry_date)}</div>
                   <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
                     <div className="bg-primary-600 h-2.5 rounded-full" style={{ width: `${Math.max(0, Math.min(100, (b.kg_remaining / b.kg_total) * 100))}%`}}></div>
                   </div>
-                  <div className="text-xs text-center text-gray-500 mt-1">{b.kg_remaining} من {b.kg_total} كجم متبقي</div>
-                  {b.opened_at && <div className="text-xs text-gray-400 mt-1">فُتحت في: {new Date(b.opened_at).toLocaleDateString('ar-EG')}</div>}
+                  <div className="text-xs text-center text-gray-500 mt-1">{formatNumber(b.kg_remaining, 2)} من {formatNumber(b.kg_total, 2)} كجم متبقي</div>
+                  {b.opened_at && (
+                    <div className="text-xs text-gray-400 mt-1">
+                      فُتحت في:{' '}
+                      {new Date(b.opened_at).toLocaleDateString('ar-EG', { numberingSystem: 'latn' })}
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => { setPrintBag(b); setLabelCount(1) }}
@@ -345,13 +397,13 @@ export default function ProductDetail() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold">الدُفعات (حسب تاريخ الصلاحية)</h2>
-          {batches.length > 0 && (
+          {filteredBatches.length > 0 && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 text-sm font-medium">
-              إجمالي المخزون: {product?.unit_type === 'bulk' ? `${totalBatchQty.toFixed(2)} كجم` : `${totalBatchQty} وحدة`}
+              إجمالي المخزون: {product?.unit_type === 'bulk' ? `${formatNumber(totalBatchQty, 2)} كجم` : `${formatNumber(totalBatchQty, 0)} وحدة`}
             </span>
           )}
         </div>
-        {batches.length === 0 ? (
+        {filteredBatches.length === 0 ? (
           <p className="text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
             لا توجد دُفعات. عند استلام بضاعة بتاريخ صلاحية يتم إنشاء دُفعة تلقائياً.
           </p>
@@ -371,7 +423,7 @@ export default function ProductDetail() {
                 </tr>
               </thead>
               <tbody>
-                {batches.map((b) => {
+                {filteredBatches.map((b) => {
                   const isExpired =
                     b.expiry_date &&
                     b.expiry_date !== '9999-12-31' &&
@@ -400,7 +452,7 @@ export default function ProductDetail() {
                                 : ''
                             }
                           >
-                            {b.expiry_date}
+                            {formatExpiryMonth(b.expiry_date)}
                             {isExpired && (
                               <span className="mr-1 text-xs bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded-full">
                                 منتهي
@@ -409,7 +461,7 @@ export default function ProductDetail() {
                           </span>
                         )}
                       </td>
-                      <td className="py-2 px-3 font-medium">{b.quantity}</td>
+                      <td className="py-2 px-3 font-medium">{formatNumber(b.quantity, 2)}</td>
                       <td className="py-2 px-3 text-gray-600 dark:text-gray-400">
                         {b.purchase_price != null ? formatCurrency(b.purchase_price) : '—'}
                       </td>
@@ -461,7 +513,7 @@ export default function ProductDetail() {
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
                 <p className="text-gray-500 dark:text-gray-400 text-xs">تاريخ الصلاحية</p>
                 <p className="font-medium">
-                  {!printBatch.expiry_date || printBatch.expiry_date === '9999-12-31' ? 'بدون تاريخ' : printBatch.expiry_date}
+                  {formatExpiryMonth(printBatch.expiry_date)}
                 </p>
               </div>
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
@@ -485,7 +537,7 @@ export default function ProductDetail() {
                 onChange={(e) => setLabelCount(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
                 className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-primary-500"
               />
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">الافتراضي = كمية الدُفعة ({printBatch.quantity})</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">الافتراضي = كمية الدُفعة ({formatNumber(printBatch.quantity, 2)})</p>
             </div>
 
             <ProductLabelPrint product={product} batch={printBatch} labelCount={labelCount} />
@@ -507,7 +559,7 @@ export default function ProductDetail() {
               </div>
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
                 <p className="text-gray-500 dark:text-gray-400 text-xs">الوزن الكلي</p>
-                <p className="font-medium">{printBag.kg_total} كجم</p>
+                <p className="font-medium">{formatNumber(printBag.kg_total, 2)} كجم</p>
               </div>
             </div>
             <ProductLabelPrint product={product} bag={printBag} labelCount={labelCount} />

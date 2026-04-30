@@ -27,6 +27,44 @@ body {
   @apply transition-shadow hover:shadow-md;
 }
 
+/* Premium Responsive Table Container */
+.responsive-table-container {
+  @apply overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm transition-all;
+}
+
+.responsive-table {
+  @apply w-full border-collapse text-right;
+}
+
+.responsive-table th {
+  @apply bg-gray-50/80 dark:bg-gray-700/50 py-3.5 px-4 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700 whitespace-nowrap;
+}
+
+.responsive-table td {
+  @apply py-3 px-4 text-sm text-gray-700 dark:text-gray-300 border-b border-gray-100 dark:border-gray-700 transition-colors;
+}
+
+.responsive-table tr:last-child td {
+  @apply border-b-0;
+}
+
+.responsive-table tr:hover td {
+  @apply bg-gray-50/50 dark:bg-gray-700/20;
+}
+
+/* Mobile Card View (for when tables are too wide) */
+.mobile-card {
+  @apply p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm space-y-3 transition-all active:scale-[0.98];
+}
+
+.mobile-card-label {
+  @apply text-xs font-medium text-gray-500 dark:text-gray-400 uppercase;
+}
+
+.mobile-card-value {
+  @apply text-sm font-semibold text-gray-900 dark:text-gray-100;
+}
+
 /* Print: only show product label area */
 @media print {
   body * {

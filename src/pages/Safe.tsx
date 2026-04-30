@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Wallet, ArrowDownLeft, ArrowUpRight, Trash2 } from 'lucide-react'
 import { getSafeBalance, getSafeTransactions, setInitialBalance, safeAdjustment, deleteSafeTransaction, clearSafeDeletableHistory } from '@/api/safe'
@@ -6,37 +7,55 @@ import { formatCurrency, formatDateTime } from '@/lib/utils'
 import SafeInitialModal from '@/components/SafeInitialModal'
 import SafeAdjustmentModal from '@/components/SafeAdjustmentModal'
 import SafeSetBalanceModal from '@/components/SafeSetBalanceModal'
+import FeedbackBanner from '@/components/FeedbackBanner'
+import SuccessOverlay from '@/components/SuccessOverlay'
 
 const typeLabels: Record<string, string> = {
   initial: 'رصيد افتتاحي',
-  customer_payment_in: 'دفعة عميل (داخل)',
+  customer_payment_in: 'سداد عميل (داخل)',
   supplier_payment_out: 'سداد لمورد (خارج)',
   adjustment_in: 'تعديل إيداع',
   adjustment_out: 'تعديل سحب',
 }
 
 export default function Safe() {
+  const [searchParams] = useSearchParams()
+  const activityRef = useRef<HTMLDivElement>(null)
   const [page] = useState(1)
   const [initialOpen, setInitialOpen] = useState(false)
   const [adjustOpen, setAdjustOpen] = useState(false)
   const [setBalanceOpen, setSetBalanceOpen] = useState(false)
+  const [safeCelebrate, setSafeCelebrate] = useState<{ title: string } | null>(null)
+  const [feedback, setFeedback] = useState<{ type: 'error' | 'warning'; message: string } | null>(null)
   const queryClient = useQueryClient()
   const initialMutation = useMutation({
     mutationFn: setInitialBalance,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['safe'] })
+      setSafeCelebrate({ title: 'تم تسجيل الرصيد الافتتاحي بنجاح' })
+    },
+    onError: (err) => {
+      setFeedback({ type: 'error', message: err instanceof Error ? err.message : 'تعذر تسجيل الرصيد الافتتاحي' })
     },
   })
   const adjustMutation = useMutation({
     mutationFn: safeAdjustment,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['safe'] })
+      setSafeCelebrate({ title: 'تم تسجيل التعديل بنجاح' })
+    },
+    onError: (err) => {
+      setFeedback({ type: 'error', message: err instanceof Error ? err.message : 'تعذر تسجيل التعديل' })
     },
   })
   const deleteTxMutation = useMutation({
     mutationFn: (id: number) => deleteSafeTransaction(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['safe'] })
+      setSafeCelebrate({ title: 'تم حذف الحركة من السجل بنجاح' })
+    },
+    onError: (err) => {
+      setFeedback({ type: 'error', message: err instanceof Error ? err.message : 'تعذر حذف الحركة' })
     },
   })
   const clearHistoryMutation = useMutation({
@@ -44,11 +63,16 @@ export default function Safe() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['safe'] })
       if (data.deleted === 0) {
-        alert('لا توجد حركات قابلة للحذف (الحركات المرتبطة بدفعات العملاء أو الموردين تبقى في السجل).')
+        setFeedback({
+          type: 'warning',
+          message: 'لا توجد حركات قابلة للحذف (الحركات المرتبطة بسداد العملاء أو الموردين تبقى في السجل).',
+        })
+      } else {
+        setSafeCelebrate({ title: `تم حذف ${data.deleted} حركة من السجل` })
       }
     },
     onError: (err) => {
-      alert(err instanceof Error ? err.message : 'فشل مسح السجل')
+      setFeedback({ type: 'error', message: err instanceof Error ? err.message : 'تعذر مسح السجل' })
     },
   })
   const { data: balanceData, isLoading: balanceLoading } = useQuery({
@@ -63,8 +87,31 @@ export default function Safe() {
   const balance = balanceData?.balance ?? 0
   const transactions = txData?.data ?? []
 
+  useEffect(() => {
+    if (!feedback) return
+    const t = window.setTimeout(() => setFeedback(null), 4500)
+    return () => window.clearTimeout(t)
+  }, [feedback])
+
+  useEffect(() => {
+    if (searchParams.get('focus') !== 'activity') return
+    const t = window.setTimeout(() => {
+      activityRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+    return () => window.clearTimeout(t)
+  }, [searchParams])
+
   return (
     <div className="space-y-6" dir="rtl">
+      <SuccessOverlay
+        open={!!safeCelebrate}
+        title={safeCelebrate?.title ?? ''}
+        durationMs={1500}
+        onComplete={() => setSafeCelebrate(null)}
+      />
+      {feedback && (
+        <FeedbackBanner type={feedback.type} message={feedback.message} />
+      )}
       <h1 className="text-xl sm:text-2xl font-bold">الخزنه</h1>
 
       <div
@@ -145,7 +192,7 @@ export default function Safe() {
         }}
       />
 
-      <div>
+      <div ref={activityRef} id="safe-activity">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-semibold">سجل الحركات</h2>
           <button
@@ -155,7 +202,7 @@ export default function Safe() {
             onClick={() => {
               if (
                 window.confirm(
-                  'هل تريد مسح السجل؟ سيتم حذف كل الحركات القابلة للحذف (رصيد افتتاحي، تعديلات، تصفير…). تبقى حركات دفعات العملاء والموردين المرتبطة بالنظام.'
+                  'هل تريد مسح السجل؟ سيتم حذف كل الحركات القابلة للحذف (رصيد افتتاحي، تعديلات، تصفير…). تبقى حركات سداد العملاء والموردين المرتبطة بالنظام.'
                 )
               ) {
                 clearHistoryMutation.mutate()
@@ -186,7 +233,7 @@ export default function Safe() {
                   tx.type === 'initial' ||
                   tx.type === 'customer_payment_in' ||
                   tx.type === 'adjustment_in'
-                const canDelete = !tx.reference_type // لا نحذف الحركات المرتبطة بدفعات
+                const canDelete = !tx.reference_type // لا نحذف الحركات المرتبطة بالسداد
                 return (
                   <li
                     key={tx.id}

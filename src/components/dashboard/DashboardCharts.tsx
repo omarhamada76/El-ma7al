@@ -57,7 +57,11 @@ function ChartTooltip({
 
 function shortDayLabel(isoDay: string) {
   try {
-    return new Intl.DateTimeFormat('ar-EG', { month: 'numeric', day: 'numeric' }).format(
+    return new Intl.DateTimeFormat('ar-EG', {
+      numberingSystem: 'latn',
+      month: 'numeric',
+      day: 'numeric',
+    }).format(
       new Date(isoDay + 'T12:00:00')
     )
   } catch {
