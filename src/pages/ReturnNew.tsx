@@ -1,10 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search, UserPlus, ArrowRight, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import { getInvoices, returnPartialInvoiceItem } from '@/api/invoices'
-import type { Client, Invoice, InvoiceItem } from '@/types/api'
 import AddClientModal from '@/components/AddClientModal'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
@@ -20,7 +19,6 @@ interface ReturnState {
 export default function ReturnNew() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [searchParams] = useSearchParams()
   
   // Selection state
   const [clientId, setClientId] = useState('')
