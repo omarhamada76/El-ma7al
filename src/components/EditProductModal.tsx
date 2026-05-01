@@ -600,7 +600,47 @@ function BatchesSection({
 }) {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const isBulk = product.unit_type === 'bulk'
+
+  const batchesNeedingSync = batches.filter(
+    (b) =>
+      (b.purchase_price == null || b.purchase_price === 0) ||
+      (b.selling_price == null || b.selling_price === 0)
+  )
+
+  const handleSyncPrices = async () => {
+    if (batchesNeedingSync.length === 0) return
+    if (
+      !window.confirm(
+        `سيتم تحديث أسعار ${batchesNeedingSync.length} دُفعة لتطابق أسعار المنتج الافتراضية (شراء: ${product.purchase_price}، بيع: ${product.selling_price}). هل أنت متأكد؟`
+      )
+    ) {
+      return
+    }
+
+    setSyncing(true)
+    try {
+      for (const b of batchesNeedingSync) {
+        await patchProductBatch(b.id, {
+          purchase_price:
+            b.purchase_price == null || b.purchase_price === 0
+              ? product.purchase_price
+              : b.purchase_price,
+          selling_price:
+            b.selling_price == null || b.selling_price === 0
+              ? product.selling_price
+              : b.selling_price,
+        })
+      }
+      invalidate()
+    } catch (err) {
+      console.error('[BatchesSection] sync failed', err)
+      alert('فشل تحديث بعض الدُفعات')
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['product', productIdKey, 'batches'] })
@@ -688,13 +728,27 @@ function BatchesSection({
           {warehouseOptions.length === 0 ? (
             <p className="text-xs text-amber-600">لا توجد مخازن — أضف مخزناً من الإعدادات أولاً.</p>
           ) : !showAdd ? (
-            <button
-              type="button"
-              onClick={() => setShowAdd(true)}
-              className="text-sm font-medium text-primary-600 dark:text-primary-400 hover:underline"
-            >
-              + إضافة دفعة يدوياً
-            </button>
+            <div className="flex items-center gap-4">
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className="text-sm font-medium text-primary-600 dark:text-primary-400 hover:underline"
+              >
+                + إضافة دفعة يدوياً
+              </button>
+              {batchesNeedingSync.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleSyncPrices}
+                  disabled={syncing}
+                  className="text-xs px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 disabled:opacity-50 transition-colors"
+                >
+                  {syncing
+                    ? 'جاري التحديث...'
+                    : `تحديث أسعار ${batchesNeedingSync.length} دُفعة (أسعار صفرية)`}
+                </button>
+              )}
+            </div>
           ) : (
             <NewBatchForm
               product={product}

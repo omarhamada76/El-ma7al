@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Search, UserPlus, ArrowRight, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Search, UserPlus, ArrowRight, RotateCcw, AlertCircle, CheckCircle2, Package } from 'lucide-react'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import { getInvoices, returnPartialInvoiceItem } from '@/api/invoices'
+import { getProducts } from '@/api/products'
 import AddClientModal from '@/components/AddClientModal'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, normalizeSearchText } from '@/lib/utils'
 
 interface ReturnState {
   [itemId: number]: {
@@ -46,11 +47,11 @@ export default function ReturnNew() {
 
   // Filter clients for search
   const filteredClients = useMemo(() => {
-    const q = clientSearch.trim().toLowerCase()
+    const q = normalizeSearchText(clientSearch)
     if (!q) return clients.slice(0, 50)
     const digits = q.replace(/\D/g, '')
     return clients.filter((c) => {
-      const nameMatch = c.name.toLowerCase().includes(q)
+      const nameMatch = normalizeSearchText(c.name).includes(q)
       const phoneDigits = (c.phone ?? '').replace(/\D/g, '')
       const phoneMatch = digits.length > 0 && phoneDigits.includes(digits)
       return nameMatch || phoneMatch
@@ -63,6 +64,19 @@ export default function ReturnNew() {
     queryFn: () => getClientBarns(clientId),
     enabled: !!clientId,
   })
+
+  // Fetch products for images
+  const { data: productsData } = useQuery({
+    queryKey: ['products', 'list', 'minimal'],
+    queryFn: () => getProducts({ limit: 1000 }),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  })
+  
+  const productsMap = useMemo(() => {
+    const map = new Map<number, string | null>()
+    productsData?.data.forEach(p => map.set(p.id, p.image_url))
+    return map
+  }, [productsData])
 
   // Fetch invoices for selected client/barn
   const { data: invoicesData, isLoading: loadingInvoices } = useQuery({
@@ -86,8 +100,9 @@ export default function ReturnNew() {
 
   // Filter invoices by search ID
   const filteredInvoices = useMemo(() => {
-    if (!invoiceSearch.trim()) return allInvoices
-    return allInvoices.filter(inv => String(inv.id).includes(invoiceSearch.trim()))
+    const q = normalizeSearchText(invoiceSearch)
+    if (!q) return allInvoices
+    return allInvoices.filter(inv => normalizeSearchText(String(inv.id)).includes(q))
   }, [allInvoices, invoiceSearch])
 
   const totalRefund = useMemo(() => {
@@ -405,18 +420,32 @@ export default function ReturnNew() {
                   className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden"
                 >
                   {/* Invoice Header */}
-                  <div className="bg-gray-50/50 dark:bg-gray-900/30 px-5 py-3 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center">
-                    <div>
-                      <span className="text-xs font-bold text-primary-600 dark:text-primary-400 uppercase">فاتورة رقم</span>
-                      <h4 className="font-bold text-gray-900 dark:text-gray-100">#{invoice.id}</h4>
+                  <div className="bg-gray-50/80 dark:bg-gray-900/50 px-5 py-4 border-b border-gray-200 dark:border-gray-700 flex flex-wrap justify-between items-center gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-primary-50 dark:bg-primary-900/30 flex items-center justify-center border border-primary-100 dark:border-primary-800">
+                        <RotateCcw className="w-5 h-5 text-primary-600" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black text-primary-600/70 dark:text-primary-400/70 uppercase tracking-wider block">فاتورة رقم</span>
+                        <h4 className="font-black text-gray-900 dark:text-gray-100 text-lg leading-none">#{invoice.id}</h4>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase block">المخزن</span>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{invoice.warehouse_name_ar || '—'}</span>
-                    </div>
-                    <div className="text-left">
-                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase block">التاريخ</span>
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{formatDate(invoice.created_at)}</span>
+                    
+                    <div className="flex flex-wrap gap-6 items-center">
+                      <div className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm">
+                        <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase block tracking-wider mb-0.5">المخزن</span>
+                        <span className="text-xs font-black text-gray-700 dark:text-gray-300">{invoice.warehouse_name_ar || '—'}</span>
+                      </div>
+                      
+                      <div className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm">
+                        <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase block tracking-wider mb-0.5">التاريخ</span>
+                        <span className="text-xs font-black text-gray-700 dark:text-gray-300">{formatDate(invoice.created_at)}</span>
+                      </div>
+                      
+                      <div className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/50 shadow-sm">
+                        <span className="text-[10px] font-bold text-emerald-600/70 dark:text-emerald-400/70 uppercase block tracking-wider mb-0.5">الإجمالي</span>
+                        <span className="text-xs font-black text-emerald-700 dark:text-emerald-300">{formatCurrency(invoice.total_amount)}</span>
+                      </div>
                     </div>
                   </div>
 
@@ -435,10 +464,27 @@ export default function ReturnNew() {
                         {invoice.items?.map((item) => (
                           <tr key={item.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors">
                             <td className="px-5 py-4">
-                              <p className="font-bold text-gray-900 dark:text-gray-100">{item.product_name}</p>
-                              {item.batch_expiry_date && (
-                                <span className="text-[10px] text-gray-400 dark:text-gray-500">صلاحية: {item.batch_expiry_date}</span>
-                              )}
+                              <div className="flex items-center gap-3">
+                                {productsMap.get(item.product_id || 0) ? (
+                                  <img
+                                    src={productsMap.get(item.product_id || 0)!}
+                                    alt=""
+                                    className="h-10 w-10 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white"
+                                  />
+                                ) : (
+                                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400">
+                                    <Package className="h-5 w-5" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="font-bold text-gray-900 dark:text-gray-100 truncate" title={item.product_name}>
+                                    {item.product_name}
+                                  </p>
+                                  {item.batch_expiry_date && (
+                                    <span className="text-[10px] text-gray-400 dark:text-gray-500">صلاحية: {item.batch_expiry_date}</span>
+                                  )}
+                                </div>
+                              </div>
                             </td>
                             <td className="px-5 py-4 tabular-nums font-medium text-gray-600 dark:text-gray-400">
                               {item.quantity} {item.product_unit_type === 'bulk' ? 'كجم' : 'وحدة'}

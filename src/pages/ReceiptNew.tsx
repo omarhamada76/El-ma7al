@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2, Package } from 'lucide-react'
 import { getSuppliers, createSupplier } from '@/api/suppliers'
 import { getWarehouses } from '@/api/warehouses'
 import { getProducts, createProduct, getProductBatches } from '@/api/products'
@@ -10,7 +10,7 @@ import {
   createSupplierReceiptWithDistribution,
   type CreateSupplierReceiptBody,
 } from '@/api/supplierPurchases'
-import { formatCurrency, fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
+import { formatCurrency, fromMonthInputValue, toMonthInputValue, normalizeSearchText } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddProductModal from '@/components/AddProductModal'
 import AddReceiptLineModal from '@/components/AddReceiptLineModal'
@@ -28,6 +28,7 @@ function defaultExpiryDate(): string {
 interface ReceiptRow {
   product_id: number
   product_name: string
+  image_url?: string | null
   quantity: number
   unit_price: number
   /** سعر البيع للدفعة الجديدة؛ إن وُجد يُستخدم بدل حساب الهامش الافتراضي */
@@ -84,6 +85,16 @@ export default function ReceiptNew() {
   })
   const suppliers = suppliersData?.data ?? []
 
+  // Auto-select "شبرا" as default supplier if found
+  useEffect(() => {
+    if (suppliers.length > 0 && !supplierId) {
+      const shubra = suppliers.find((s) => s.name === 'شبرا')
+      if (shubra) {
+        setSupplierId(String(shubra.id))
+      }
+    }
+  }, [suppliers, supplierId])
+
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
     queryFn: getWarehouses,
@@ -92,7 +103,7 @@ export default function ReceiptNew() {
 
   const { data: productsData } = useQuery({
     queryKey: ['products', 'list'],
-    queryFn: () => getProducts({ limit: 500 }),
+    queryFn: () => getProducts({ limit: 2000 }),
   })
   const products = productsData?.data ?? []
   const { data: categoryOptions = [] } = useQuery({
@@ -103,7 +114,7 @@ export default function ReceiptNew() {
   const createMutation = useMutation({
     mutationFn: (body: CreateSupplierReceiptBody) =>
       createSupplierReceiptWithDistribution(body),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       queryClient.invalidateQueries({ queryKey: ['reports'] })
       queryClient.invalidateQueries({ queryKey: ['suppliers'] })
@@ -118,7 +129,10 @@ export default function ReceiptNew() {
         title: 'تم تسجيل استلام المورد بنجاح',
         subtitle: 'جاري التوجيه…',
         durationMs: 1700,
-        then: () => navigate('/inventory?unpriced=1'),
+        then: () => {
+          const productIds = variables.items.map(i => i.product_id).filter(Boolean).join(',')
+          navigate(`/inventory?ids=${productIds}`)
+        },
       })
     },
     onError: (err) => {
@@ -216,6 +230,7 @@ export default function ReceiptNew() {
     const newRow: ReceiptRow = {
       product_id: product.id,
       product_name: product.name,
+      image_url: product.image_url,
       quantity: q,
       unit_price: product.purchase_price,
       selling_price:
@@ -238,6 +253,7 @@ export default function ReceiptNew() {
       next[index] = {
         product_id: product.id,
         product_name: product.name,
+        image_url: product.image_url,
         quantity: sum || 1,
         unit_price: product.purchase_price,
         selling_price:
@@ -485,6 +501,7 @@ export default function ReceiptNew() {
             <table className="hidden sm:table w-full min-w-[56rem] text-sm">
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+                  <th className="text-right py-3 px-3 w-16">الصورة</th>
                   <th className="text-right py-3 px-3 min-w-[16rem] w-[26%] align-top">المنتج</th>
                   <th className="text-right py-3 px-3 w-32">تاريخ الصلاحية</th>
                   <th className="text-right py-3 px-3 w-24">الكمية</th>
@@ -500,12 +517,30 @@ export default function ReceiptNew() {
               <tbody>
                 {items.map((row, index) => {
                   const isSearchOpen = focusedProductRow === index
-                  const searchNorm = productSearchQuery.trim().toLowerCase()
+                  const searchNorm = normalizeSearchText(productSearchQuery)
                   const filteredProducts = searchNorm
-                    ? products.filter((p) => p.name.toLowerCase().includes(searchNorm))
+                    ? products.filter(
+                        (p) =>
+                          normalizeSearchText(p.name).includes(searchNorm) ||
+                          (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm))
+                      )
                     : products
                   return (
                   <tr key={index} className="border-b border-gray-100 dark:border-gray-700">
+                    <td className="py-2 px-3 align-top">
+                      {row.image_url ? (
+                        <img
+                          src={row.image_url}
+                          alt=""
+                          loading="lazy"
+                          className="h-10 w-10 shrink-0 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm"
+                        />
+                      ) : (
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400">
+                          <Package className="h-5 w-5" />
+                        </div>
+                      )}
+                    </td>
                     <td className="py-1.5 px-3 relative min-w-[16rem] w-[26%] align-top">
                       <div ref={isSearchOpen ? productSearchRef : null} className="relative z-20 min-w-[14rem]">
                         <input
@@ -539,9 +574,16 @@ export default function ReceiptNew() {
                                       setFocusedProductRow(null)
                                       setProductSearchQuery('')
                                     }}
-                                    className="w-full text-right px-3 py-2 text-sm whitespace-normal break-words hover:bg-gray-100 dark:hover:bg-gray-700"
+                                    className="w-full flex items-center gap-3 text-right px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                                   >
-                                    {p.name}
+                                    {p.image_url ? (
+                                      <img src={p.image_url} alt="" className="h-8 w-8 rounded object-cover border border-gray-100 dark:border-gray-600" />
+                                    ) : (
+                                      <div className="h-8 w-8 flex items-center justify-center rounded border border-dashed border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-400">
+                                        <Package className="h-4 w-4" />
+                                      </div>
+                                    )}
+                                    <span className="flex-1 text-right">{p.name}</span>
                                   </button>
                                 </li>
                               ))
@@ -633,7 +675,7 @@ export default function ReceiptNew() {
                   if (!status) return null
                   return (
                     <tr key={`notice-${index}`} className="border-b border-gray-100 dark:border-gray-700">
-                      <td colSpan={6 + sortedWarehouses.length + 1} className="py-1 px-3">
+                      <td colSpan={7 + sortedWarehouses.length + 1} className="py-1 px-3">
                         <span className="text-xs">
                           <span className="font-medium text-gray-600 dark:text-gray-400">{row.product_name}:</span>{' '}
                           {status === 'merge' ? (
@@ -657,16 +699,29 @@ export default function ReceiptNew() {
             <div className="sm:hidden divide-y divide-gray-100 dark:divide-gray-700">
               {items.map((row, index) => {
                 const isSearchOpen = focusedProductRow === index
-                const searchNorm = productSearchQuery.trim().toLowerCase()
+                const searchNorm = normalizeSearchText(productSearchQuery)
                 const filteredProducts = searchNorm
-                  ? products.filter((p) => p.name.toLowerCase().includes(searchNorm))
+                  ? products.filter((p) => normalizeSearchText(p.name).includes(searchNorm))
                   : products
                 const status = getBatchMatchStatus(row)
 
                 return (
                   <div key={index} className="p-4 space-y-4">
-                    <div className="flex justify-between items-start gap-2">
-                       <div ref={isSearchOpen ? productSearchRef : null} className="relative flex-1 min-w-0">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="shrink-0 pt-6">
+                        {row.image_url ? (
+                          <img
+                            src={row.image_url}
+                            alt=""
+                            className="h-12 w-12 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm"
+                          />
+                        ) : (
+                          <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400">
+                            <Package className="h-6 w-6" />
+                          </div>
+                        )}
+                      </div>
+                      <div ref={isSearchOpen ? productSearchRef : null} className="relative flex-1 min-w-0">
                          <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase font-bold mb-1 block">المنتج</label>
                          <input
                            type="text"
@@ -696,9 +751,16 @@ export default function ReceiptNew() {
                                        setFocusedProductRow(null)
                                        setProductSearchQuery('')
                                      }}
-                                     className="w-full text-right px-3 py-2.5 text-sm hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
+                                     className="w-full flex items-center gap-3 text-right px-3 py-2.5 text-sm hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-colors"
                                    >
-                                     {p.name}
+                                     {p.image_url ? (
+                                       <img src={p.image_url} alt="" className="h-8 w-8 rounded object-cover border border-gray-100 dark:border-gray-600" />
+                                     ) : (
+                                       <div className="h-8 w-8 flex items-center justify-center rounded border border-dashed border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-400">
+                                         <Package className="h-4 w-4" />
+                                       </div>
+                                     )}
+                                     <span className="flex-1 text-right">{p.name}</span>
                                    </button>
                                  </li>
                                ))

@@ -4,7 +4,7 @@ import { Plus, Trash2, ArrowLeft, Search, Package } from 'lucide-react'
 import { getWarehouses } from '@/api/warehouses'
 import { getProductsWithStockInWarehouse } from '@/api/products'
 import { createInventoryTransfer, type CreateTransferBody } from '@/api/inventoryTransfers'
-import { cn, formatNumber } from '@/lib/utils'
+import { cn, formatNumber, normalizeSearchText } from '@/lib/utils'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
 import type { Product } from '@/types/api'
@@ -86,12 +86,12 @@ export default function TransferToShobra() {
   )
 
   // Filter for search
-  const searchNorm = searchQuery.trim().toLowerCase()
+  const searchNorm = normalizeSearchText(searchQuery)
   const filteredProducts = useMemo(() => {
     const alreadyAdded = new Set(items.map((i) => i.product_id))
     const available = productsWithStock.filter((p) => !alreadyAdded.has(p.id))
     if (!searchNorm) return available
-    return available.filter((p) => p.name.toLowerCase().includes(searchNorm))
+    return available.filter((p) => normalizeSearchText(p.name).includes(searchNorm))
   }, [productsWithStock, items, searchNorm])
 
   /* ─── Transfer mutation ─── */

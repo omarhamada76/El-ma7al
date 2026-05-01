@@ -10,6 +10,7 @@ export interface ProductsParams {
   low_stock?: boolean
   unpriced?: boolean
   expiring?: boolean
+  ids?: string
 }
 
 export async function getProducts(params: ProductsParams = {}): Promise<{

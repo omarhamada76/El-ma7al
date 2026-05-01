@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
-import { Plus, Package, Search, ArrowLeft, Pencil, Trash2, ChevronRight, ChevronLeft, FileText } from 'lucide-react'
+import { Plus, Package, Search, ArrowLeft, Pencil, Trash2, ChevronRight, ChevronLeft, FileText, X } from 'lucide-react'
 import { getProducts, createProduct, updateProduct, deleteProduct, getWarehouseStockMap } from '@/api/products'
 import type { Product } from '@/types/api'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions, createCategory } from '@/api/categories'
-import { cn, formatCurrency, formatNumber } from '@/lib/utils'
+import { cn, formatCurrency, formatNumber, normalizeSearchText } from '@/lib/utils'
 import AddProductModal from '@/components/AddProductModal'
 import AddCategoryModal from '@/components/AddCategoryModal'
 import ContextMenu from '@/components/ContextMenu'
@@ -61,6 +61,19 @@ export default function Inventory() {
     if (searchParams.get('lowStock') === '1' || lowStockMode) return 'low_stock'
     return 'all'
   }, [searchParams, lowStockMode])
+
+  const productIdsParam = searchParams.get('ids')
+  const clearIdsFilter = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev)
+        p.delete('ids')
+        return p
+      },
+      { replace: true }
+    )
+  }, [setSearchParams])
+
   const applyListFilter = useCallback(
     (next: InventoryListFilter) => {
       if (next === 'low_stock') {
@@ -170,21 +183,18 @@ export default function Inventory() {
 
   const limit = 50
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: ['products', search, warehouseId, category, listFilter, page],
+    queryKey: ['products', page, search, category, warehouseId, listFilter, productIdsParam],
     queryFn: () =>
       getProducts({
-        search: search || undefined,
-        warehouse_id: warehouseId,
-        category: category || undefined,
-        ...(listFilter === 'expiring'
-          ? { expiring: true }
-          : listFilter === 'unpriced'
-            ? { unpriced: true }
-            : listFilter === 'low_stock'
-              ? { low_stock: true }
-              : {}),
-        limit,
         page,
+        limit: 50,
+        search: productIdsParam ? undefined : (normalizeSearchText(search) || undefined),
+        category: productIdsParam ? undefined : (category === '' ? undefined : category),
+        warehouse_id: productIdsParam ? undefined : warehouseId,
+        low_stock: productIdsParam ? false : listFilter === 'low_stock',
+        unpriced: productIdsParam ? false : listFilter === 'unpriced',
+        expiring: productIdsParam ? false : listFilter === 'expiring',
+        ids: productIdsParam || undefined,
       }),
     placeholderData: keepPreviousData,
   })
@@ -192,7 +202,7 @@ export default function Inventory() {
   const totalPages = Math.max(1, Math.ceil(total / limit))
   useEffect(() => {
     setPage(1)
-  }, [search, category, listFilter])
+  }, [search, category, listFilter, productIdsParam])
   useEffect(() => {
     if (searchParams.get('add') !== '1') return
     setAddOpen(true)
@@ -387,6 +397,18 @@ export default function Inventory() {
             className="w-full py-2 ps-12 pe-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
           />
         </div>
+        {productIdsParam && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 rounded-lg border border-primary-100 dark:border-primary-800 animate-in fade-in slide-in-from-left-2">
+            <span className="text-sm font-medium">عرض منتجات آخر استلام</span>
+            <button
+              onClick={clearIdsFilter}
+              className="p-0.5 hover:bg-primary-100 dark:hover:bg-primary-800 rounded-full transition-colors"
+              title="إلغاء التصفية"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <select
           value={warehouseId ?? ''}
           onChange={(e) => {
@@ -542,24 +564,36 @@ export default function Inventory() {
                     }}
                   >
                     <td className="py-2 px-4">
-                      <div className="flex items-center gap-2 font-medium">
-                        {p.image_url ? (
-                          <img
-                            src={p.image_url}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            className="h-9 w-9 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-600"
-                          />
-                        ) : (
-                          <span
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/50 text-gray-400"
-                            aria-hidden
+                      <div className="flex items-center gap-3">
+                        <div className="relative group shrink-0">
+                          {p.image_url ? (
+                            <img
+                              src={p.image_url}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="h-12 w-12 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm transition-transform duration-200 group-hover:scale-[2.5] group-hover:z-50 group-hover:relative group-hover:shadow-xl group-hover:ring-4 group-hover:ring-white dark:group-hover:ring-gray-800"
+                            />
+                          ) : (
+                            <div
+                              className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400"
+                              aria-hidden
+                            >
+                              <Package className="h-5 w-5" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <Link
+                            to={`/inventory/products/${p.id}`}
+                            className="font-bold text-gray-900 dark:text-gray-100 hover:text-primary-600 dark:hover:text-primary-400 transition-colors truncate"
                           >
-                            <Package className="h-4 w-4" />
+                            {p.name}
+                          </Link>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 sm:hidden">
+                            {p.category ?? '—'}
                           </span>
-                        )}
-                        <span className="min-w-0 break-words">{p.name}</span>
+                        </div>
                       </div>
                     </td>
                     <td className="py-2 px-4 text-gray-500 dark:text-gray-400 hidden sm:table-cell">

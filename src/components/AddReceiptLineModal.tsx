@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Modal from './Modal'
-import { cn, fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
+import { cn, fromMonthInputValue, toMonthInputValue, normalizeSearchText } from '@/lib/utils'
+import { Package } from 'lucide-react'
 import type { Product } from '@/types/api'
 
 interface AddReceiptLineModalProps {
@@ -36,9 +37,13 @@ export default function AddReceiptLineModal({
   }, [open])
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = normalizeSearchText(search)
     if (!q) return products
-    return products.filter((p) => p.name.toLowerCase().includes(q))
+    return products.filter(
+      (p) =>
+        normalizeSearchText(p.name).includes(q) ||
+        (p.barcode && normalizeSearchText(p.barcode).includes(q))
+    )
   }, [products, search])
 
   const selected = selectedId != null ? products.find((p) => p.id === selectedId) : undefined
@@ -160,13 +165,25 @@ export default function AddReceiptLineModal({
                         }
                       }}
                       className={cn(
-                        'w-full text-right px-3 py-2.5 text-sm transition-colors cursor-pointer',
+                        'w-full flex items-center gap-3 text-right px-3 py-2.5 text-sm transition-colors cursor-pointer',
                         selectedId === p.id
                           ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-900 dark:text-primary-100 font-medium'
                           : 'hover:bg-gray-50 dark:hover:bg-gray-700/80'
                       )}
                     >
-                      {p.name} {p.unit_type === 'bulk' && <span className="text-xs text-primary-600 mr-2 bg-primary-100 px-1 py-0.5 rounded">منتج بالوزن (شكاير)</span>}
+                      {p.image_url ? (
+                        <img src={p.image_url} alt="" className="h-10 w-10 rounded-lg object-cover border border-gray-200 dark:border-gray-600 shadow-sm" />
+                      ) : (
+                        <div className="h-10 w-10 flex items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-400">
+                          <Package className="h-5 w-5" />
+                        </div>
+                      )}
+                      <div className="flex-1 text-right">
+                        <div>{p.name}</div>
+                        {p.unit_type === 'bulk' && (
+                          <span className="text-[10px] text-primary-600 bg-primary-100 px-1 py-0.5 rounded">منتج بالوزن (شكاير)</span>
+                        )}
+                      </div>
                     </button>
                   </li>
                 ))}

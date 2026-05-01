@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { getClients, createClient, updateClient, deleteClient, togglePin } from '@/api/clients'
 import type { Client } from '@/types/api'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, normalizeSearchText } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddClientModal from '@/components/AddClientModal'
 import SuccessOverlay from '@/components/SuccessOverlay'
@@ -75,7 +75,7 @@ export default function Clients() {
     queryKey: ['clients', search, pinnedFilter, sortByDebt],
     queryFn: () =>
       getClients({
-        search: search || undefined,
+        search: normalizeSearchText(search) || undefined,
         pinned: pinnedFilter,
         limit: 50,
         sort: sortByDebt ? 'debt_desc' : undefined,

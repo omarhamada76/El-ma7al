@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams, useMatch, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Search, UserPlus } from 'lucide-react'
+import { Plus, Trash2, Search, UserPlus, Package } from 'lucide-react'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import type { Client } from '@/types/api'
 import AddClientModal from '@/components/AddClientModal'
@@ -17,7 +17,7 @@ import {
 import type { ProductBatch } from '@/types/api'
 import { createInvoice, getInvoice, updateInvoice } from '@/api/invoices'
 import { useAuthStore } from '@/stores/auth'
-import { cn, formatCurrency, formatExpiryMonth, formatNumber, getNearExpiryWarning } from '@/lib/utils'
+import { cn, formatCurrency, formatExpiryMonth, formatNumber, getNearExpiryWarning, normalizeSearchText } from '@/lib/utils'
 import { quantityColumnLabelsForInvoiceNewRows } from '@/lib/quantityColumnHeader'
 import { parseScannedBarcode } from '@/components/ProductLabelPrint'
 import BatchPickerModal from '@/components/BatchPickerModal'
@@ -120,7 +120,7 @@ export default function InvoiceNew() {
 
   // Batch picker modal state
   const [batchPickerOpen, setBatchPickerOpen] = useState(false)
-  const [batchPickerProduct, setBatchPickerProduct] = useState<{ id: number; name: string; stock: number } | null>(null)
+  const [batchPickerProduct, setBatchPickerProduct] = useState<{ id: number; name: string; stock: number; selling_price?: number } | null>(null)
   const [batchPickerBatches, setBatchPickerBatches] = useState<ProductBatch[]>([])
 
   const { data: invoiceToEdit, isLoading: invoiceEditLoading } = useQuery({
@@ -434,9 +434,10 @@ export default function InvoiceNew() {
   }, [remainingUnpaid, effectivePaidAmount])
 
   const filteredWarehouseProducts = productSearch.trim()
-    ? productsWithStock.filter(({ product }) =>
-        product.name.toLowerCase().includes(productSearch.trim().toLowerCase())
-      )
+    ? productsWithStock.filter(({ product }) => {
+        const q = normalizeSearchText(productSearch)
+        return normalizeSearchText(product.name).includes(q)
+      })
     : productsWithStock
   const showProductList = warehouseId && productsWithStock.length > 0
 
@@ -569,14 +570,14 @@ export default function InvoiceNew() {
     }
 
     // Multiple batches — open picker
-    setBatchPickerProduct({ id: product.id, name: product.name, stock })
+    setBatchPickerProduct({ id: product.id, name: product.name, stock, selling_price: product.selling_price })
     setBatchPickerBatches(activeBatches)
     setBatchPickerOpen(true)
   }
 
   const handleBatchSelected = (batch: ProductBatch, qty: number) => {
     if (!batchPickerProduct) return
-    const price = batch.selling_price != null && batch.selling_price > 0 ? batch.selling_price : 0
+    const price = batch.selling_price != null && batch.selling_price > 0 ? batch.selling_price : (batchPickerProduct.selling_price ?? 0)
     const isSentinel = !batch.expiry_date || batch.expiry_date === '9999-12-31'
     setItems((prev) => {
       const existing = prev.find((i) => i.batch_id === batch.id)
@@ -809,7 +810,7 @@ export default function InvoiceNew() {
       return false
     }
 
-    setBatchPickerProduct({ id: product.id, name: entry.product.name, stock: entry.stock })
+    setBatchPickerProduct({ id: product.id, name: entry.product.name, stock: entry.stock, selling_price: entry.product.selling_price })
     setBatchPickerBatches(activeBatches)
     setBatchPickerOpen(true)
     return true
@@ -1513,16 +1514,28 @@ export default function InvoiceNew() {
                   return (
                   <tr key={index} className="border-b border-gray-100 dark:border-gray-700">
                     <td className="py-2 px-1.5 sm:px-3 align-top min-w-[12rem]">
-                      <div className="space-y-1.5 min-w-0 max-w-full">
-                      {isBulkProduct && (
-                        <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold">منتج بالوزن (كجم)</span>
-                      )}
-                      <p
-                        className="text-xs sm:text-sm font-medium text-gray-900 dark:text-gray-100 leading-snug text-right break-words [overflow-wrap:anywhere]"
-                        title={row.product_name}
-                      >
-                        {row.product_name}
-                      </p>
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        {pEntries?.product.image_url ? (
+                          <img
+                            src={pEntries.product.image_url}
+                            alt=""
+                            className="h-9 w-9 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white mt-0.5"
+                          />
+                        ) : (
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400 mt-0.5">
+                            <Package className="h-4.5 w-4.5" />
+                          </div>
+                        )}
+                        <div className="space-y-1 min-w-0 flex-1">
+                          {isBulkProduct && (
+                            <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold">منتج بالوزن (كجم)</span>
+                          )}
+                          <p
+                            className="text-xs sm:text-sm font-medium text-gray-900 dark:text-gray-100 leading-snug text-right break-words [overflow-wrap:anywhere]"
+                            title={row.product_name}
+                          >
+                            {row.product_name}
+                          </p>
                       {row.bag_id ? (
                         <div className="mt-1 flex items-center gap-1 flex-wrap">
                           <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200 px-1.5 py-0.5 rounded-full">
@@ -1603,6 +1616,7 @@ export default function InvoiceNew() {
                           </div>
                         )
                       })() : null)}
+                      </div>
                       </div>
                     </td>
                     <td className="py-2 px-1 sm:px-2 align-top min-w-0">
@@ -1725,13 +1739,28 @@ export default function InvoiceNew() {
                 return (
                   <div key={index} className="p-3 space-y-3">
                     <div className="flex justify-between items-start gap-2">
-                       <div className="min-w-0">
-                         {isBulkProduct && (
-                           <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold mb-1">منتج بالوزن</span>
-                         )}
-                         <p className="text-sm font-bold text-gray-900 dark:text-gray-100 leading-tight">
-                           {row.product_name}
-                         </p>
+                       <div className="flex gap-3 min-w-0">
+                         {(() => {
+                           const p = productsWithStock.find((p) => p.product.id === row.product_id)?.product
+                           return p?.image_url ? (
+                             <img
+                               src={p.image_url}
+                               alt=""
+                               className="h-10 w-10 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white"
+                             />
+                           ) : (
+                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400">
+                               <Package className="h-5 w-5" />
+                             </div>
+                           )
+                         })()}
+                         <div className="min-w-0">
+                           {isBulkProduct && (
+                             <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold mb-1">منتج بالوزن</span>
+                           )}
+                           <p className="text-sm font-bold text-gray-900 dark:text-gray-100 leading-tight">
+                             {row.product_name}
+                           </p>
                          {(row.bag_id || row.batch_id) && (
                             <div className="mt-1 flex flex-col gap-1">
                               <div className="flex flex-wrap gap-1">
@@ -1745,6 +1774,7 @@ export default function InvoiceNew() {
                               )}
                             </div>
                          )}
+                       </div>
                        </div>
                        <button
                          type="button"

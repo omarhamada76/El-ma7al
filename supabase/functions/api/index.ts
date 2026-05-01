@@ -32,6 +32,15 @@ function normalizeProductImageUrl(v: unknown): string | null {
   return s
 }
 
+function normalizeArabicNumbers(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776))
+    .replace(/٪/g, '%')
+}
+
 async function query(sql: string, params: unknown[] = []) {
   const client = await pool.connect()
   try {
@@ -815,14 +824,14 @@ Deno.serve(async (req) => {
       await requireAuth(req)
       const sp = url.searchParams
       const limit = Math.min(Number(sp.get('limit') || 50), 500)
-      const search = (sp.get('search') || '').trim()
+      const search = normalizeArabicNumbers(sp.get('search') || '')
       const pinned = sp.get('pinned')
       const sort = sp.get('sort')
       const where: string[] = []
       const args: unknown[] = []
       if (search) {
         args.push(`%${search}%`)
-        where.push(`(c.name ilike $${args.length} or c.phone ilike $${args.length})`)
+        where.push(`(translate(c.name, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%') ilike $${args.length} or coalesce(translate(c.phone, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%'),'') ilike $${args.length})`)
       }
       if (pinned === 'true') where.push('coalesce(c.pinned,false) = true')
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
@@ -1189,21 +1198,31 @@ Deno.serve(async (req) => {
       `).catch(() => {/* ignore errors if Postgres version doesn't support "include" or specific syntax */})
 
       const sp = url.searchParams
-      const limit = Math.min(Number(sp.get('limit') || 100), 500)
+      const limit = Math.min(Number(sp.get('limit') || 100), 5000)
       const page = Math.max(1, Number(sp.get('page') || 1))
       const offset = (page - 1) * limit
-      const search = (sp.get('search') || '').trim()
+      const search = normalizeArabicNumbers(sp.get('search') || '')
       const category = (sp.get('category') || '').trim()
       const warehouse_id = sp.get('warehouse_id')
       const low_stock = sp.get('low_stock') === 'true'
       const unpriced = sp.get('unpriced') === 'true'
       const expiring = sp.get('expiring') === 'true'
+      const idsParam = sp.get('ids')
 
       const where: string[] = []
       const args: unknown[] = []
       if (search) {
+        const num = parseInt(search, 10)
+        const isNum = !isNaN(num) && /^\d+$/.test(search)
+        
         args.push(`%${search}%`)
-        where.push(`(p.name ilike $${args.length} or coalesce(p.barcode,'') ilike $${args.length})`)
+        let searchClause = `(translate(p.name, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%') ilike $${args.length} or coalesce(translate(p.barcode, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%'),'') ilike $${args.length})`
+        
+        if (isNum) {
+          args.push(num)
+          searchClause = `(${searchClause} or p.id = $${args.length} or exists (select 1 from product_batches pb where pb.product_id = p.id and pb.id = $${args.length}) or exists (select 1 from bag_instances bi where bi.product_id = p.id and bi.id = $${args.length}))`
+        }
+        where.push(searchClause)
       }
       if (category) {
         args.push(category)
@@ -1224,6 +1243,13 @@ Deno.serve(async (req) => {
           `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date <= (now() + interval '30 days') and coalesce(b.quantity,0) > 0)`
         )
       }
+      if (idsParam) {
+        const idList = idsParam.split(',').map(Number).filter(n => !isNaN(n))
+        if (idList.length > 0) {
+          args.push(idList)
+          where.push(`p.id = any($${args.length})`)
+        }
+      }
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
       const listArgs = [...args, limit, offset]
       const warehouseIdIdx = warehouse_id ? args.indexOf(Number(warehouse_id)) + 1 : -1
@@ -1232,7 +1258,7 @@ Deno.serve(async (req) => {
         `select
            p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
            p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date,
-           null as image_url, 
+           p.image_url, 
            coalesce(ws.batch_total_quantity, 0) as batch_total_quantity,
            ${warehouse_id ? `coalesce(pws.quantity, 0) as warehouse_stock,` : 'coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock,'}
            b.purchase_price_min,
@@ -1725,13 +1751,13 @@ Deno.serve(async (req) => {
       await requireAuth(req)
       const sp = url.searchParams
       const limit = Math.min(Number(sp.get('limit') || 50), 200)
-      const search = (sp.get('search') || '').trim()
+      const search = normalizeArabicNumbers(sp.get('search') || '')
       const sortBal = (sp.get('sort') || '').trim() === 'balance_desc'
       const args: unknown[] = []
       let where = ''
       if (search) {
         args.push(`%${search}%`)
-        where = `where (s.name ilike $1 or coalesce(s.phone,'') ilike $1)`
+        where = `where (translate(s.name, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%') ilike $1 or coalesce(translate(s.phone, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%'),'') ilike $1)`
       }
       args.push(limit)
       const balExpr = `(
@@ -1917,7 +1943,7 @@ Deno.serve(async (req) => {
       const warehouseId = url.searchParams.get('warehouse_id')
       const clientId = url.searchParams.get('client_id')
       const barnId = url.searchParams.get('barn_id')
-      const searchId = url.searchParams.get('id')
+      const searchId = normalizeArabicNumbers(url.searchParams.get('id') || '')
       const from = (url.searchParams.get('from') || '').trim()
       const to = (url.searchParams.get('to') || '').trim()
       const where: string[] = [`coalesce(invoice_lifecycle,'active') != 'cancelled'`]
@@ -1927,6 +1953,10 @@ Deno.serve(async (req) => {
       const unpaid = url.searchParams.get('unpaid')
       if (unpaid === '1' || unpaid === 'true') {
         where.push('coalesce(remaining_amount, 0) > 0')
+      }
+      if (searchId) {
+        args.push(`%${searchId}%`)
+        where.push(`cast(id as text) ilike $${args.length}`)
       }
       if (status) {
         args.push(status)

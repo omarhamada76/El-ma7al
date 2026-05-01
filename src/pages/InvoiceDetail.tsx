@@ -348,67 +348,69 @@ export default function InvoiceDetail() {
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-sm">
-        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">التاريخ</p>
-          <p className="font-semibold">{formatDate(invoice.created_at)}</p>
+        <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm transition-all hover:border-primary-200 dark:hover:border-primary-800">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">التاريخ</p>
+          <p className="font-bold text-gray-900 dark:text-gray-100">{formatDate(invoice.created_at)}</p>
         </div>
-        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المخزن</p>
-          <p className="font-semibold">{warehouseName ?? invoice.warehouse_id}</p>
+        <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm transition-all hover:border-primary-200 dark:hover:border-primary-800">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">المخزن</p>
+          <p className="font-bold text-gray-900 dark:text-gray-100">{warehouseName ?? invoice.warehouse_id}</p>
         </div>
-        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">العنبر</p>
+        <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm transition-all hover:border-primary-200 dark:hover:border-primary-800">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">العنبر</p>
           {invoice.barn_id ? (
-            <p className="font-semibold flex items-center gap-2">
+            <p className="font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
               {barn?.name ?? `#${invoice.barn_id}`}
               {barn && (
                 <Link
                   to={`/barns/${invoice.barn_id}`}
-                  className="text-[10px] text-primary-600 dark:text-primary-400 hover:underline border border-primary-200 dark:border-primary-800 bg-primary-50 dark:bg-primary-900/20 px-1.5 py-0.5 rounded"
+                  className="text-[10px] text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 border border-primary-200 dark:border-primary-800 px-1.5 py-0.5 rounded-md font-bold transition-colors"
                 >
                   عرض العنبر
                 </Link>
               )}
             </p>
           ) : (
-            <p className="font-semibold text-gray-400 dark:text-gray-500">—</p>
+            <p className="font-bold text-gray-300 dark:text-gray-600">—</p>
           )}
         </div>
-        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">اسم العميل</p>
-          <p className="font-semibold">{invoice.customer_name}</p>
+        <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm transition-all hover:border-primary-200 dark:hover:border-primary-800">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">اسم العميل</p>
+          <p className="font-bold text-gray-900 dark:text-gray-100">{invoice.customer_name}</p>
         </div>
-        <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">طريقة الدفع</p>
+        <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm transition-all hover:border-primary-200 dark:hover:border-primary-800">
+          <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">طريقة الدفع</p>
           <span className={cn(
-             "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase",
-             invoice.payment_method === 'cash' ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+             "px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-tight",
+             invoice.payment_method === 'cash' ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : "bg-amber-50 text-amber-700 border border-amber-100"
           )}>
             {paymentMethodLabel(invoice.payment_method)}
           </span>
         </div>
-        <div className="p-3 rounded-lg border border-primary-100 dark:border-primary-900/30 bg-primary-50/30 dark:bg-primary-900/10">
-          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المجموع النهائي</p>
-          <p className="font-black text-primary-700 dark:text-primary-300 text-base">{formatCurrency(invoice.total_amount)}</p>
+        <div className="p-3.5 rounded-xl border-2 border-primary-100 dark:border-primary-900/50 bg-primary-50/20 dark:bg-primary-900/10 shadow-sm">
+          <p className="text-[10px] text-primary-600/70 dark:text-primary-400/70 uppercase font-black mb-1 tracking-wider">المجموع النهائي</p>
+          <p className="font-black text-primary-700 dark:text-primary-300 text-lg">{formatCurrency(invoice.total_amount)}</p>
         </div>
         {isInvoiceCashPayment(invoice.payment_method) ? (
-          <div className="p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
-            <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">المدفوع / المتبقي</p>
-            <p className="font-semibold tabular-nums">
-              {formatCurrency(invoice.paid_amount)} / {formatCurrency(invoice.remaining_amount)}
+          <div className="p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 shadow-sm">
+            <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">المدفوع / المتبقي</p>
+            <p className="font-bold tabular-nums text-gray-900 dark:text-gray-100">
+              {formatCurrency(invoice.paid_amount)} / <span className="text-red-600 dark:text-red-400">{formatCurrency(invoice.remaining_amount)}</span>
             </p>
           </div>
         ) : null}
         {hasInvBarnBalanceSnapshot && (
-          <div className="sm:col-span-2 p-3 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30 flex justify-between gap-4">
-            <div>
-              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">رصيد العنبر (قبل)</p>
-              <p className="font-semibold tabular-nums">{formatCurrency(invBarnBefore)}</p>
+          <div className="sm:col-span-2 p-3.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/30 shadow-sm flex justify-between items-center gap-4">
+            <div className="flex-1">
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">رصيد العنبر (قبل)</p>
+              <p className="font-bold tabular-nums text-gray-900 dark:text-gray-100">{formatCurrency(invBarnBefore)}</p>
             </div>
-            <ArrowRight className="w-4 h-4 text-gray-400 self-center rotate-180" />
-            <div className="text-left">
-              <p className="text-xs text-gray-500 dark:text-gray-400 uppercase font-bold mb-1">رصيد العنبر (بعد)</p>
-              <p className="font-semibold tabular-nums">{formatCurrency(invBarnAfter)}</p>
+            <div className="w-8 h-8 rounded-full bg-white dark:bg-gray-700 flex items-center justify-center shadow-sm border border-gray-100 dark:border-gray-600">
+              <ArrowRight className="w-4 h-4 text-gray-400 rotate-180" />
+            </div>
+            <div className="flex-1 text-left">
+              <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold mb-1 tracking-wider">رصيد العنبر (بعد)</p>
+              <p className="font-bold tabular-nums text-primary-600 dark:text-primary-400">{formatCurrency(invBarnAfter)}</p>
             </div>
           </div>
         )}

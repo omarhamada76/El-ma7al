@@ -216,10 +216,10 @@ export async function getAllProductNames() {
   return r.rows.map((x) => x.name)
 }
 
-function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false }) {
+function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false }, startIdx = 1) {
   const clauses = []
   const params = []
-  let idx = 1
+  let idx = startIdx
 
   if (lowStock) {
     if (warehouseId != null && Number.isInteger(warehouseId)) {
@@ -262,9 +262,20 @@ function buildProductsFilterWhere({ search, category, warehouseId = null, lowSto
   }
 
   if (search) {
-    clauses.push(`LOWER(p.name) LIKE $${idx}`)
-    params.push(`%${String(search).toLowerCase()}%`)
+    const s = String(search).toLowerCase()
+    const num = parseInt(String(search), 10)
+    const isNum = !isNaN(num) && /^\d+$/.test(String(search))
+    
+    let searchClause = `(LOWER(p.name) LIKE $${idx} OR LOWER(COALESCE(p.barcode, '')) LIKE $${idx})`
+    params.push(`%${s}%`)
     idx += 1
+    
+    if (isNum) {
+      searchClause = `(${searchClause} OR p.id = $${idx} OR EXISTS (SELECT 1 FROM product_batches pb WHERE pb.product_id = p.id AND pb.id = $${idx}) OR EXISTS (SELECT 1 FROM bag_instances bi WHERE bi.product_id = p.id AND bi.id = $${idx}))`
+      params.push(num)
+      idx += 1
+    }
+    clauses.push(searchClause)
   }
   if (category) {
     clauses.push(`p.category = $${idx}`)
@@ -294,7 +305,7 @@ export async function getProductCountFiltered(
     lowStock,
     unpriced,
     expiring,
-  })
+  }, whOk ? 2 : 1)
   const params = whOk ? [warehouseId, ...filter.params] : [...filter.params]
   const q = await pool.query(
     `
@@ -370,7 +381,7 @@ export async function getProducts(
     lowStock,
     unpriced,
     expiring,
-  })
+  }, whOk ? 2 : 1)
   const lim = Math.min(Number(limit) || 100, 500)
   const off = Math.max(0, Number(offset) || 0)
   const params = whOk
@@ -378,7 +389,9 @@ export async function getProducts(
     : [...filter.params, lim, off]
   const q = await pool.query(
     `
-      SELECT p.*,
+      SELECT p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
+        p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date, 
+        p.image_url, p.notes, p.created_at, p.updated_at,
         ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
         bgi.bulk_bag_count, bgi.bulk_open_bag_low
       FROM products p
@@ -390,6 +403,9 @@ export async function getProducts(
     `,
     params
   )
+  console.log('[DEBUG] First row from getProducts query:', q.rows[0] ? Object.keys(q.rows[0]) : 'no rows');
+  if (q.rows[0]) console.log('[DEBUG] image_url in first row:', q.rows[0].image_url);
+
   return q.rows.map((r) => ({
     ...r,
     bulk_open_bag_low: !!r.bulk_open_bag_low,

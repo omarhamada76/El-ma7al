@@ -150,3 +150,20 @@ export function formatExpiryMonth(date: string | null | undefined): string {
 export function getNearExpiryWarning(earliestExpiry: string): string {
   return `تنبيه: يوجد دفعة أخرى أقرب انتهاءً (${formatExpiryMonth(earliestExpiry)}) — يفضل بيعها أولاً`
 }
+
+/**
+ * Normalizes Arabic strings by converting Eastern Arabic numerals (٠-٩) to Western Arabic numerals (0-9).
+ */
+export function normalizeArabicNumbers(text: string): string {
+  return text
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776))
+    .replace(/٪/g, '%')
+}
+
+/**
+ * Prepares text for search by normalizing case, trimming, and normalizing Arabic numerals.
+ */
+export function normalizeSearchText(text: string): string {
+  return normalizeArabicNumbers(text.trim().toLowerCase())
+}

@@ -463,13 +463,21 @@ export default function ProductDetail() {
                       </td>
                       <td className="py-2 px-3 font-medium">{formatNumber(b.quantity, 2)}</td>
                       <td className="py-2 px-3 text-gray-600 dark:text-gray-400">
-                        {b.purchase_price != null ? formatCurrency(b.purchase_price) : '—'}
+                        {b.purchase_price != null && b.purchase_price > 0 ? (
+                          formatCurrency(b.purchase_price)
+                        ) : (
+                          <span className="text-gray-400 italic text-xs" title="سعر الشراء الافتراضي للمنتج">
+                            {formatCurrency(product.purchase_price)} (افتراضي)
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 px-3">
                         {b.selling_price != null && b.selling_price > 0 ? (
                           formatCurrency(b.selling_price)
                         ) : (
-                          <span className="text-amber-600">—</span>
+                          <span className="text-amber-600 italic text-xs font-medium" title="سعر البيع الافتراضي للمنتج">
+                            {formatCurrency(product.selling_price)} (افتراضي)
+                          </span>
                         )}
                       </td>
                       <td className="py-2 px-3">
