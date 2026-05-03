@@ -39,11 +39,46 @@ export default function AddReceiptLineModal({
   const filtered = useMemo(() => {
     const q = normalizeSearchText(search)
     if (!q) return products
-    return products.filter(
-      (p) =>
-        normalizeSearchText(p.name).includes(q) ||
-        (p.barcode && normalizeSearchText(p.barcode).includes(q))
+    const filteredList = products.filter(
+      (p) => {
+        const isNumeric = /^\d+$/.test(q)
+        const nameMatch = normalizeSearchText(p.name).includes(q)
+        
+        if (isNumeric) {
+          // Strict numeric matching for ID and Barcode
+          const idMatch = String(p.id) === q
+          const barcodeMatch = p.barcode && (p.barcode === q || p.barcode.endsWith(q))
+          return nameMatch || idMatch || barcodeMatch
+        }
+        
+        // General text matching
+        const barcodeMatch = p.barcode && normalizeSearchText(p.barcode).includes(q)
+        const idMatch = String(p.id).includes(q)
+        return nameMatch || barcodeMatch || idMatch
+      }
     )
+
+    return filteredList.sort((a, b) => {
+      const aBar = normalizeSearchText(a.barcode || '')
+      const bBar = normalizeSearchText(b.barcode || '')
+      if (aBar === q && bBar !== q) return -1
+      if (bBar === q && aBar !== q) return 1
+
+      const aName = normalizeSearchText(a.name)
+      const bName = normalizeSearchText(b.name)
+      if (aName === q && bName !== q) return -1
+      if (bName === q && aName !== q) return 1
+
+      const aId = String(a.id)
+      const bId = String(b.id)
+      const qNum = parseInt(q, 10)
+      const aMatchesId = aId === q || (!isNaN(qNum) && a.id === qNum)
+      const bMatchesId = bId === q || (!isNaN(qNum) && b.id === qNum)
+      if (aMatchesId && !bMatchesId) return -1
+      if (bMatchesId && !aMatchesId) return 1
+
+      return a.name.localeCompare(b.name, 'ar')
+    })
   }, [products, search])
 
   const selected = selectedId != null ? products.find((p) => p.id === selectedId) : undefined
@@ -179,7 +214,10 @@ export default function AddReceiptLineModal({
                         </div>
                       )}
                       <div className="flex-1 text-right">
-                        <div>{p.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span>{p.name}</span>
+                          <span className="text-xs text-gray-400 font-mono">#{p.id}</span>
+                        </div>
                         {p.unit_type === 'bulk' && (
                           <span className="text-[10px] text-primary-600 bg-primary-100 px-1 py-0.5 rounded">منتج بالوزن (شكاير)</span>
                         )}

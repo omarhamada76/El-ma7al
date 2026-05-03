@@ -10,6 +10,10 @@ export interface BarcodeProps {
   /** Text below barcode (JsBarcode `fontSize`) */
   fontSize?: number
   displayValue?: boolean
+  /** Custom text to display instead of the value */
+  text?: string
+  /** Quiet zone margin in px */
+  margin?: number
   className?: string
   style?: React.CSSProperties
 }
@@ -20,6 +24,8 @@ export default function Barcode({
   height = 40,
   fontSize = 10,
   displayValue = true,
+  text,
+  margin = 10,
   className,
   style,
 }: BarcodeProps) {
@@ -35,8 +41,9 @@ export default function Barcode({
         width,
         height,
         displayValue,
+        text,
         fontSize,
-        margin: 0,
+        margin,
         background: '#ffffff',
         lineColor: '#000000',
       })

@@ -774,12 +774,28 @@ const handlers = {
     const row = await db.updateProduct(id, body)
     send(res, 200, row)
   },
-  'DELETE /api/v1/products/:id': async (req, res, _body, { pathParts }) => {
+  'DELETE /api/v1/products/:id': async (req, res, _body, { pathParts, query }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
     const p = await db.getProductById(id)
     if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
-    await db.deleteProduct(id)
+    const force = query.force === 'true'
+    if (force && req.auth.role !== 'super_admin') {
+      return send(res, 403, { message: 'الحذف القسري متاح فقط لمدير النظام', code: 'PRODUCT_FORCE_DELETE_FORBIDDEN' })
+    }
+    try {
+      await db.deleteProductWithPolicy(id, { force })
+    } catch (e) {
+      if (e?.code === 'PRODUCT_HAS_REFERENCES') {
+        return send(res, 409, {
+          message: e.message,
+          code: e.code,
+          can_force: true,
+          references: e.references || null,
+        })
+      }
+      throw e
+    }
     send(res, 204)
   },
   'GET /api/v1/products/by-barcode': async (req, res, _body, { query }) => {

@@ -52,8 +52,10 @@ export default function Settings() {
   })
 
   function toggleDark() {
-    document.documentElement.classList.toggle('dark', !dark)
-    setDark(!dark)
+    const newDark = !dark
+    document.documentElement.classList.toggle('dark', newDark)
+    setDark(newDark)
+    localStorage.setItem('theme', newDark ? 'dark' : 'light')
   }
 
   return (

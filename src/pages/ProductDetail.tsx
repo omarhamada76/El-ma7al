@@ -1,13 +1,14 @@
 import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Package, Pencil, Trash2 } from 'lucide-react'
-import { getProduct, getProductStock, getProductBatches, getProductBags, deleteProduct } from '@/api/products'
+import { ArrowRight, Package, Pencil, Trash2, FileText, AlertTriangle } from 'lucide-react'
+import { getProduct, getProductStock, getProductBatches, getProductBags, deleteProduct, updateProduct } from '@/api/products'
+import { ApiError } from '@/api/client'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions } from '@/api/categories'
 import { formatCurrency, formatExpiryMonth, formatNumber } from '@/lib/utils'
 import ProductLabelPrint from '@/components/ProductLabelPrint'
-import type { ProductBatch, BagInstance } from '@/types/api'
+import type { Product, ProductBatch, BagInstance } from '@/types/api'
 import EditProductModal from '@/components/EditProductModal'
 import SetProductStockModal from '@/components/SetProductStockModal'
 import { useAuthStore } from '@/stores/auth'
@@ -26,6 +27,8 @@ export default function ProductDetail() {
   const [printBatch, setPrintBatch] = useState<ProductBatch | null>(null)
   const [printBag, setPrintBag] = useState<BagInstance | null>(null)
   const [labelCount, setLabelCount] = useState(1)
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const role = useAuthStore((s) => s.user?.role)
   const canEditBatches = canManageProductBatches(role)
   const isSuperAdmin = role === 'super_admin'
@@ -60,19 +63,42 @@ export default function ProductDetail() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteProduct(id!),
+    mutationFn: ({ force }: { force?: boolean } = {}) => deleteProduct(id!, force),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
-      queryClient.invalidateQueries({ queryKey: ['products', 'warehouse'] })
-      queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
-      queryClient.invalidateQueries({ queryKey: ['warehouse-batches'] })
       queryClient.invalidateQueries({ queryKey: ['product'] })
       navigate('/inventory')
     },
+    onError: (err: any) => {
+      const msg = err instanceof Error ? err.message : 'تعذر حذف المنتج'
+      const canOfferArchiveOrForce =
+        err instanceof ApiError
+          ? err.code === 'PRODUCT_HAS_REFERENCES' || !!err.can_force
+          : msg.includes('أرشفة') || msg.includes('force')
+      if (canOfferArchiveOrForce) {
+        setArchiveConfirmOpen(true)
+      } else {
+        setErrorMessage(msg)
+      }
+    }
+  })
+
+  const archiveMutation = useMutation({
+    mutationFn: (active: boolean = false) => updateProduct(id!, { is_active: active } as Partial<Product>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['product', id] })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      setArchiveConfirmOpen(false)
+    },
+    onError: (err: any) => {
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر تعديل حالة الأرشفة')
+    }
   })
 
   const handleDelete = () => {
-    if (window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) deleteMutation.mutate()
+    if (window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) {
+      deleteMutation.mutate({})
+    }
   }
 
   const warehouseNames = useMemo(
@@ -156,6 +182,14 @@ export default function ProductDetail() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      {errorMessage && (
+        <div className="fixed top-4 left-4 right-4 z-[220] mx-auto max-w-lg rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800 px-4 py-3 text-sm shadow-lg flex items-center justify-between">
+          <span>{errorMessage}</span>
+          <button onClick={() => setErrorMessage(null)} className="font-bold">×</button>
+        </div>
+      )}
+
+
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 min-w-0">
           <Link to="/inventory" className="hover:underline shrink-0">
@@ -218,7 +252,12 @@ export default function ProductDetail() {
           )}
         </div>
         <div className="min-w-0 flex-1 space-y-1 text-center sm:text-start">
-          <h1 className="text-xl sm:text-2xl font-bold">{product.name}</h1>
+          <h1 className="text-xl sm:text-2xl font-bold">
+            {product.name}{' '}
+            <span className="text-gray-400 dark:text-gray-500 font-normal">
+              #{product.id}
+            </span>
+          </h1>
           {!product.image_url && (
             <p className="text-sm text-gray-500 dark:text-gray-400">
               لا توجد صورة — أضفها من «تعديل»
@@ -370,7 +409,7 @@ export default function ProductDetail() {
                   <div className="text-sm">المخزن: {b.warehouse_name_ar || `مخزن ${b.warehouse_id}`}</div>
                   <div className="text-sm">الصلاحية: {formatExpiryMonth(b.expiry_date)}</div>
                   <div className="mt-2 w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
-                    <div className="bg-primary-600 h-2.5 rounded-full" style={{ width: `${Math.max(0, Math.min(100, (b.kg_remaining / b.kg_total) * 100))}%`}}></div>
+                    <div className="bg-primary-600 h-2.5 rounded-full" style={{ width: `${Math.max(0, Math.min(100, (b.kg_remaining / b.kg_total) * 100))}%` }}></div>
                   </div>
                   <div className="text-xs text-center text-gray-500 mt-1">{formatNumber(b.kg_remaining, 2)} من {formatNumber(b.kg_total, 2)} كجم متبقي</div>
                   {b.opened_at && (
@@ -432,11 +471,10 @@ export default function ProductDetail() {
                   return (
                     <tr
                       key={b.id}
-                      className={`border-b border-gray-100 dark:border-gray-700 last:border-0 ${
-                        isExpired
+                      className={`border-b border-gray-100 dark:border-gray-700 last:border-0 ${isExpired
                           ? 'bg-red-50 dark:bg-red-900/10'
                           : ''
-                      }`}
+                        }`}
                     >
                       <td className="py-2 px-3">
                         {b.warehouse_name_ar ?? warehouseNames[b.warehouse_id] ?? `مخزن ${b.warehouse_id}`}
@@ -545,7 +583,7 @@ export default function ProductDetail() {
                 onChange={(e) => setLabelCount(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
                 className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-primary-500"
               />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">الافتراضي = كمية الدُفعة ({formatNumber(printBatch.quantity, 2)})</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">الافتراضي = كمية الدُفعة ({formatNumber(printBatch.quantity, 2)})</p>
             </div>
 
             <ProductLabelPrint product={product} batch={printBatch} labelCount={labelCount} />
@@ -588,6 +626,52 @@ export default function ProductDetail() {
             queryClient.invalidateQueries({ queryKey: ['warehouse-stock', stockEdit.warehouseId] })
           }}
         />
+      )}
+      {archiveConfirmOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95 duration-200" dir="rtl">
+            <div className="flex items-center gap-3 text-amber-600 mb-4">
+              <div className="p-2 bg-amber-50 dark:bg-amber-900/30 rounded-lg">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-bold">تعذر الحذف - هل تود الأرشفة؟</h3>
+            </div>
+            <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm leading-relaxed">
+              لا يمكن حذف المنتج "{product.name}" لوجود سجلات مرتبطة به. 
+              يمكنك أرشفته بدلاً من ذلك، مما سيؤدي لإخفائه من القوائم النشطة مع الحفاظ على البيانات التاريخية.
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => archiveMutation.mutate(false)}
+                disabled={archiveMutation.isPending || deleteMutation.isPending}
+                className="w-full px-4 py-2.5 bg-primary-600 text-white rounded-lg font-bold hover:bg-primary-700 disabled:opacity-50"
+              >
+                {archiveMutation.isPending ? 'جاري الأرشفة...' : 'نعم، قم بالأرشفة (خيار آمن)'}
+              </button>
+              
+              {isSuperAdmin && (
+                <button
+                  onClick={() => {
+                    if (window.confirm(`تنبيه: سيتم مسح كافة الفواتير والسجلات المرتبطة بالمنتج "${product.name}". هذا الإجراء غير قابل للتراجع. هل أنت متأكد؟`)) {
+                      deleteMutation.mutate({ force: true })
+                    }
+                  }}
+                  disabled={deleteMutation.isPending || archiveMutation.isPending}
+                  className="w-full px-4 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg font-bold hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-50"
+                >
+                  {deleteMutation.isPending ? 'جاري الحذف القسري...' : 'حذف قسري (مسح التاريخ)'}
+                </button>
+              )}
+
+              <button
+                onClick={() => setArchiveConfirmOpen(false)}
+                className="w-full px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg font-bold hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

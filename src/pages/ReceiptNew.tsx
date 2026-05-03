@@ -78,6 +78,16 @@ export default function ReceiptNew() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [focusedProductRow])
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (items.length > 0) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [items.length])
 
   const { data: suppliersData } = useQuery({
     queryKey: ['suppliers', 'list'],
@@ -520,9 +530,14 @@ export default function ReceiptNew() {
                   const searchNorm = normalizeSearchText(productSearchQuery)
                   const filteredProducts = searchNorm
                     ? products.filter(
-                        (p) =>
-                          normalizeSearchText(p.name).includes(searchNorm) ||
-                          (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm))
+                        (p) => {
+                          const isNumeric = /^\d+$/.test(searchNorm)
+                          const nameMatch = normalizeSearchText(p.name).includes(searchNorm)
+                          if (isNumeric) {
+                            return nameMatch || String(p.id) === searchNorm || (p.barcode && (p.barcode === searchNorm || p.barcode.endsWith(searchNorm)))
+                          }
+                          return nameMatch || (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm)) || String(p.id).includes(searchNorm)
+                        }
                       )
                     : products
                   return (
@@ -583,7 +598,12 @@ export default function ReceiptNew() {
                                         <Package className="h-4 w-4" />
                                       </div>
                                     )}
-                                    <span className="flex-1 text-right">{p.name}</span>
+                                    <div className="flex-1 text-right">
+                                      <div className="flex items-center gap-2">
+                                        <span>{p.name}</span>
+                                        <span className="text-xs text-gray-400 font-mono">#{p.id}</span>
+                                      </div>
+                                    </div>
                                   </button>
                                 </li>
                               ))
@@ -701,7 +721,16 @@ export default function ReceiptNew() {
                 const isSearchOpen = focusedProductRow === index
                 const searchNorm = normalizeSearchText(productSearchQuery)
                 const filteredProducts = searchNorm
-                  ? products.filter((p) => normalizeSearchText(p.name).includes(searchNorm))
+                  ? products.filter(
+                      (p) => {
+                        const isNumeric = /^\d+$/.test(searchNorm)
+                        const nameMatch = normalizeSearchText(p.name).includes(searchNorm)
+                        if (isNumeric) {
+                          return nameMatch || String(p.id) === searchNorm || (p.barcode && (p.barcode === searchNorm || p.barcode.endsWith(searchNorm)))
+                        }
+                        return nameMatch || (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm)) || String(p.id).includes(searchNorm)
+                      }
+                    )
                   : products
                 const status = getBatchMatchStatus(row)
 
@@ -760,7 +789,12 @@ export default function ReceiptNew() {
                                          <Package className="h-4 w-4" />
                                        </div>
                                      )}
-                                     <span className="flex-1 text-right">{p.name}</span>
+                                     <div className="flex-1 text-right">
+                                       <div className="flex items-center gap-2">
+                                         <span>{p.name}</span>
+                                         <span className="text-xs text-gray-400 font-mono">#{p.id}</span>
+                                       </div>
+                                     </div>
                                    </button>
                                  </li>
                                ))

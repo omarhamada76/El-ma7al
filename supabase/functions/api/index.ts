@@ -1209,50 +1209,121 @@ Deno.serve(async (req) => {
       const expiring = sp.get('expiring') === 'true'
       const idsParam = sp.get('ids')
 
+      // Helper for Arabic character normalization (Alef, Yaa, Teh Marbuta, Hamza)
+      const normalizeArabicForSql = (field: string) => `translate(lower(coalesce(${field}, '')), 'أإآةىئؤ', 'اااهيءء')`
+      const normalizeArabicText = (text: string) => text.toLowerCase()
+        .replace(/[أإآ]/g, 'ا')
+        .replace(/ة/g, 'ه')
+        .replace(/ى/g, 'ي')
+        .replace(/[ئؤ]/g, 'ء')
+
       const where: string[] = []
-      const args: unknown[] = []
+      const whereArgs: any[] = []
+      const addWhereParam = (v: any) => {
+        whereArgs.push(v)
+        return `$${whereArgs.length}`
+      }
+
+      let searchForOrder: string | null = null
       if (search) {
-        const num = parseInt(search, 10)
-        const isNum = !isNaN(num) && /^\d+$/.test(search)
+        const normalizedSearch = normalizeArabicNumbers(search)
+        searchForOrder = normalizedSearch
+        const searchWords = normalizedSearch.split(/\s+/).filter(w => w.length > 0)
         
-        args.push(`%${search}%`)
-        let searchClause = `(translate(p.name, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%') ilike $${args.length} or coalesce(translate(p.barcode, '٠١٢٣٤٥٦٧٨٩٪', '0123456789%'),'') ilike $${args.length})`
-        
-        if (isNum) {
-          args.push(num)
-          searchClause = `(${searchClause} or p.id = $${args.length} or exists (select 1 from product_batches pb where pb.product_id = p.id and pb.id = $${args.length}) or exists (select 1 from bag_instances bi where bi.product_id = p.id and bi.id = $${args.length}))`
+        if (searchWords.length > 0) {
+          const wordClauses: string[] = []
+          for (const word of searchWords) {
+            const normalizedWord = normalizeArabicText(word)
+            const pContains = addWhereParam(`%${normalizedWord}%`)
+            
+            // Match pure numeric (e.g. "56" or "0056") or prefixed IDs (e.g. "B56" or "G56")
+            const numericM = /^(\d{1,12})$/.exec(word)
+            const batchM = /^B(\d{1,12})$/i.exec(word)
+            const bagM = /^G(\d{1,12})$/i.exec(word)
+            const targetId = numericM?.[1] || batchM?.[1] || bagM?.[1]
+            
+            if (targetId) {
+              const pInt = addWhereParam(Number(targetId))
+              const pWord = addWhereParam(word)
+              const pSuffix = addWhereParam(`%${word}`)
+              
+              let idConditions = `exists (select 1 from product_batches b where b.product_id = p.id and b.id = ${pInt})`
+              if (numericM) {
+                idConditions += ` or p.id = ${pInt} or p.barcode = ${pWord} or p.barcode ilike ${pSuffix}`
+              }
+              
+              wordClauses.push(`(${normalizeArabicForSql('p.name')} ilike ${pContains} or ${idConditions})`)
+            } else {
+              wordClauses.push(`(${normalizeArabicForSql('p.name')} ilike ${pContains} or ${normalizeArabicForSql('p.barcode')} ilike ${pContains} or p.id::text ilike ${pContains})`)
+            }
+          }
+          where.push(`(${wordClauses.join(' AND ')})`)
         }
-        where.push(searchClause)
-      }
-      if (category) {
-        args.push(category)
-        where.push(`p.category = $${args.length}`)
-      }
-      if (warehouse_id) {
-        args.push(Number(warehouse_id))
-        where.push(`p.id in (select product_id from product_warehouse_stock where warehouse_id = $${args.length})`)
-      }
-      if (low_stock) {
-        where.push(`(select coalesce(sum(quantity),0) from product_warehouse_stock s where s.product_id = p.id) <= (case when p.unit_type = 'bulk' then coalesce(p.alert_level_kg, p.alert_level) else coalesce(p.alert_level, 0) end)`)
-      }
-      if (unpriced) {
-        where.push(`coalesce(p.selling_price, 0) = 0`)
-      }
-      if (expiring) {
-        where.push(
-          `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date <= (now() + interval '30 days') and coalesce(b.quantity,0) > 0)`
-        )
-      }
-      if (idsParam) {
-        const idList = idsParam.split(',').map(Number).filter(n => !isNaN(n))
-        if (idList.length > 0) {
-          args.push(idList)
-          where.push(`p.id = any($${args.length})`)
+      } else {
+        if (category) {
+          where.push(`p.category = ${addWhereParam(category)}`)
+        }
+        if (warehouse_id) {
+          where.push(`p.id in (select product_id from product_warehouse_stock where warehouse_id = ${addWhereParam(Number(warehouse_id))})`)
+        }
+        if (low_stock) {
+          where.push(`(select coalesce(sum(quantity),0) from product_warehouse_stock s where s.product_id = p.id) <= (case when p.unit_type = 'bulk' then coalesce(p.alert_level_kg, p.alert_level) else coalesce(p.alert_level, 0) end)`)
+        }
+        if (unpriced) {
+          where.push(`coalesce(p.selling_price, 0) = 0`)
+        }
+        if (expiring) {
+          where.push(
+            `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date <= (now() + interval '30 days') and coalesce(b.quantity,0) > 0)`
+          )
+        }
+        if (idsParam) {
+          const idList = idsParam.split(',').map(Number).filter(n => !isNaN(n))
+          if (idList.length > 0) {
+            where.push(`p.id = any(${addWhereParam(idList)})`)
+          }
         }
       }
+
+      // Removed is_active filtering as per user request
+
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
-      const listArgs = [...args, limit, offset]
-      const warehouseIdIdx = warehouse_id ? args.indexOf(Number(warehouse_id)) + 1 : -1
+      const total = await query(`select count(*)::int as c from products p ${whereSql}`, whereArgs)
+      
+      // Now build list query args, starting with whereArgs so whereSql indexes remain valid
+      const listArgs = [...whereArgs]
+      const addListParam = (v: any) => {
+        listArgs.push(v)
+        return `$${listArgs.length}`
+      }
+
+      const whParam = warehouse_id ? addListParam(Number(warehouse_id)) : null
+      
+      let orderBy = 'p.id desc'
+      if (searchForOrder) {
+        const pExact = addListParam(searchForOrder)
+        // Check for numeric/batch IDs to prioritize in ordering
+        const numericM = /^(\d+)$/.exec(searchForOrder)
+        const batchM = /^B(\d+)$/i.exec(searchForOrder)
+        const bagM = /^G(\d+)$/i.exec(searchForOrder)
+        const targetId = numericM?.[1] || batchM?.[1] || bagM?.[1]
+        
+        let batchPriority = ''
+        if (targetId) {
+          const pInt = addListParam(Number(targetId))
+          batchPriority = `when exists (select 1 from product_batches b where b.product_id = p.id and b.id = ${pInt}) then 3`
+        }
+
+        orderBy = `case 
+          when p.id::text = ${pExact} then 0 
+          when p.barcode = ${pExact} then 1 
+          when lower(p.name) = ${pExact} then 2 
+          ${batchPriority}
+          else 4 end, p.id desc`
+      }
+
+      const pLimit = addListParam(limit)
+      const pOffset = addListParam(offset)
 
       const list = await query(
         `select
@@ -1260,7 +1331,7 @@ Deno.serve(async (req) => {
            p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date,
            p.image_url, 
            coalesce(ws.batch_total_quantity, 0) as batch_total_quantity,
-           ${warehouse_id ? `coalesce(pws.quantity, 0) as warehouse_stock,` : 'coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock,'}
+           ${whParam ? `coalesce(pws.quantity, 0) as warehouse_stock,` : 'coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock,'}
            b.purchase_price_min,
            b.purchase_price_max,
            b.selling_price_min,
@@ -1272,9 +1343,9 @@ Deno.serve(async (req) => {
            select sum(s.quantity) as batch_total_quantity
            from product_warehouse_stock s
            where s.product_id = p.id
-            ${warehouse_id ? `and s.warehouse_id = $${warehouseIdIdx}` : 'and s.warehouse_id = 1'}
+            ${whParam ? `and s.warehouse_id = ${whParam}` : 'and s.warehouse_id = 1'}
          ) ws on true
-         ${warehouse_id ? `left join product_warehouse_stock pws on pws.product_id = p.id and pws.warehouse_id = $${warehouseIdIdx}` : ''}
+         ${whParam ? `left join product_warehouse_stock pws on pws.product_id = p.id and pws.warehouse_id = ${whParam}` : ''}
          left join lateral (
            select min(pb.purchase_price) as purchase_price_min,
                   max(pb.purchase_price) as purchase_price_max,
@@ -1282,7 +1353,7 @@ Deno.serve(async (req) => {
                   max(pb.selling_price) as selling_price_max
            from product_batches pb
            where pb.product_id = p.id and coalesce(pb.quantity,0) > 0
-             ${warehouse_id ? `and pb.warehouse_id = $${warehouseIdIdx}` : ''}
+             ${whParam ? `and pb.warehouse_id = ${whParam}` : ''}
          ) b on true
          left join lateral (
            select count(*)::int as bulk_bag_count,
@@ -1297,11 +1368,10 @@ Deno.serve(async (req) => {
              and coalesce(bins.kg_remaining, 0) > 0
          ) bi on true
          ${whereSql}
-         order by p.id desc
-         limit $${args.length + 1} offset $${args.length + 2}`,
+         order by ${orderBy}
+         limit ${pLimit} offset ${pOffset}`,
         listArgs,
       )
-      const total = await query(`select count(*)::int as c from products p ${whereSql}`, args)
       return send(200, { data: list.rows, total: Number(total.rows?.[0]?.c ?? 0) })
     }
 
@@ -1328,8 +1398,8 @@ Deno.serve(async (req) => {
       const imageUrl = normalizeProductImageUrl(body.image_url)
       const out = await query(
         `insert into products
-         (name, company, category, barcode, unit_type, bag_weight_kg, purchase_price, selling_price, alert_level, alert_level_kg, expiry_date, image_url, notes, created_at, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,null,$11,$12,now(),now())
+         (name, company, category, barcode, unit_type, bag_weight_kg, purchase_price, selling_price, alert_level, alert_level_kg, expiry_date, image_url, notes, is_active, created_at, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,null,$11,$12,$13,now(),now())
          returning *`,
         [
           body.name ?? '',
@@ -1344,6 +1414,7 @@ Deno.serve(async (req) => {
           alertKg,
           imageUrl,
           body.notes ?? null,
+          body.is_active !== undefined ? Boolean(body.is_active) : true,
         ],
       )
       const product = out.rows?.[0] as Record<string, unknown> | undefined
@@ -1375,7 +1446,11 @@ Deno.serve(async (req) => {
       await requireAuth(req)
       const barcode = (url.searchParams.get('barcode') || '').trim()
       if (!barcode) return send(200, null)
-      const out = await query('select * from products where barcode = $1 limit 1', [barcode])
+      // Normalize Eastern Arabic numerals in the database to match the incoming normalized barcode
+      const out = await query(
+        `select * from products where translate(barcode, '٠١٢٣٤٥٦٧٨٩', '0123456789') = $1 limit 1`,
+        [barcode]
+      )
       return send(200, out.rows?.[0] ?? null)
     }
 
@@ -1408,6 +1483,7 @@ Deno.serve(async (req) => {
       if (body.notes !== undefined) add('notes', body.notes ?? null)
       if (body.expiry_date !== undefined) add('expiry_date', body.expiry_date ?? null)
       if (body.image_url !== undefined) add('image_url', normalizeProductImageUrl(body.image_url))
+      if (body.is_active !== undefined) add('is_active', Boolean(body.is_active))
       if (!fields.length) {
         const cur = await query('select * from products where id = $1 limit 1', [id])
         return send(200, cur.rows?.[0])
@@ -1420,10 +1496,43 @@ Deno.serve(async (req) => {
     }
 
     if (method === 'DELETE' && getProduct) {
-      await requireAuth(req)
+      const auth = await requireAuth(req) as Record<string, unknown>
       const id = Number(getProduct[1])
-      await query('delete from products where id = $1', [id])
-      return send(204, {})
+      const sp = new URL(req.url).searchParams
+      const force = sp.get('force') === 'true'
+      const appMeta = (auth?.app_metadata as Record<string, unknown> | undefined) ?? {}
+      const role = String(auth?.role ?? appMeta.role ?? '')
+
+      if (force && role !== 'super_admin') {
+        return send(403, { message: 'الحذف القسري متاح فقط لمدير النظام', code: 'PRODUCT_FORCE_DELETE_FORBIDDEN' })
+      }
+
+      if (force) {
+        // Force delete: clean up history
+        await query(
+          `delete from return_items
+           where invoice_item_id in (select id from invoice_items where product_id = $1)
+              or batch_id in (select id from product_batches where product_id = $1)`,
+          [id]
+        )
+        await query('delete from invoice_items where product_id = $1', [id])
+        await query('delete from supplier_purchase_items where product_id = $1', [id])
+        // product_batches and product_warehouse_stock have ON DELETE CASCADE in DB
+      }
+
+      try {
+        await query('delete from products where id = $1', [id])
+        return send(204, {})
+      } catch (err: any) {
+        if (err.message?.includes('violates foreign key constraint')) {
+          return send(409, {
+            error: 'لا يمكن حذف هذا المنتج لوجود سجلات مرتبطة به. يمكنك أرشفة المنتج، أو استخدام "الحذف القسري" لمسح كافة السجلات التاريخية المرتبطة به.',
+            code: 'PRODUCT_HAS_REFERENCES',
+            can_force: true,
+          })
+        }
+        throw err
+      }
     }
 
     const productStock = path.match(/^\/products\/(\d+)\/stock$/)

@@ -28,6 +28,16 @@ export default function PaymentNew() {
     queryFn: () => getClients({ limit: 300 }),
   })
   const clients = clientsData?.data ?? []
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (amount > 0 || clientId) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [amount, clientId])
 
   useEffect(() => {
     if (presetFromUrlAppliedRef.current) return

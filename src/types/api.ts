@@ -84,6 +84,7 @@ export interface Product {
   expiry_date: string | null
   image_url: string | null
   notes: string | null
+  is_active: boolean
   created_at: string
   updated_at: string
   /** Batch-derived price ranges — only present from list endpoint */

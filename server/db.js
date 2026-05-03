@@ -29,6 +29,7 @@ function getDb() {
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
   db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
   runMigrations(db)
   ensureInvoiceDiscountColumn(db)
   ensureInvoiceEditAuditColumns(db)

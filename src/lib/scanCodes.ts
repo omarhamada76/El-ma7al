@@ -1,8 +1,8 @@
 const SCAN_SEP = '||'
 
 export type ParsedScan =
-  | { kind: 'batch'; batchId: number }
-  | { kind: 'bag'; bagInstanceId: number }
+  | { kind: 'batch'; batchId: number; rawToken?: string; isExplicit?: boolean }
+  | { kind: 'bag'; bagInstanceId: number; rawToken?: string; isExplicit?: boolean }
   | {
       kind: 'product'
       code: string
@@ -10,6 +10,7 @@ export type ParsedScan =
       productName: string | null
       batchId: number | null
       expiryDate: string | null
+      rawToken?: string
     }
 
 /** Remove invisible / direction marks often inserted by scanners or PDF paste. */
@@ -32,8 +33,8 @@ function extractLongestBatchOrBagToken(t: string): ParsedScan | null {
   const all = [...b, ...g]
   if (all.length === 0) return null
   const best = all.reduce((a, x) => (x.len > a.len ? x : a))
-  if (best.kind === 'batch') return { kind: 'batch', batchId: best.id }
-  return { kind: 'bag', bagInstanceId: best.id }
+  if (best.kind === 'batch') return { kind: 'batch', batchId: best.id, rawToken: t, isExplicit: true }
+  return { kind: 'bag', bagInstanceId: best.id, rawToken: t, isExplicit: true }
 }
 
 /** Batch label / invoice scan: `B7` → batch id 7 */
@@ -63,23 +64,23 @@ export function isExpiryWithinDays(expiryDate: string | null | undefined, days: 
 export function parseScannedBarcode(raw: string): ParsedScan {
   const s = stripInvisible((raw || '').trim())
   if (!s) {
-    return { kind: 'product', code: '', unitPrice: null, productName: null, batchId: null, expiryDate: null }
+    return { kind: 'product', code: '', unitPrice: null, productName: null, batchId: null, expiryDate: null, rawToken: s }
   }
 
   const batchM = /^B(\d+)$/i.exec(s)
   if (batchM) {
-    return { kind: 'batch', batchId: parseInt(batchM[1], 10) }
+    return { kind: 'batch', batchId: parseInt(batchM[1], 10), rawToken: s, isExplicit: true }
   }
 
-  // Treat pure 4 to 6 digit numbers as manual batch short codes (e.g. "0124" -> 124)
-  const numericBatchM = /^\d{4,6}$/.exec(s)
+  // Treat pure numeric codes (up to 8 digits) as potential Batch IDs (e.g. "418" or "0056")
+  const numericBatchM = /^\d{1,8}$/.exec(s)
   if (numericBatchM) {
-    return { kind: 'batch', batchId: parseInt(numericBatchM[0], 10) }
+    return { kind: 'batch', batchId: parseInt(numericBatchM[0], 10), rawToken: s, isExplicit: false }
   }
 
   const bagM = /^G(\d+)$/i.exec(s)
   if (bagM) {
-    return { kind: 'bag', bagInstanceId: parseInt(bagM[1], 10) }
+    return { kind: 'bag', bagInstanceId: parseInt(bagM[1], 10), rawToken: s, isExplicit: true }
   }
 
   // Prefix/suffix junk (no pipe composite): e.g. "]C1B47" or "scanB47end"
@@ -98,5 +99,5 @@ export function parseScannedBarcode(raw: string): ParsedScan {
   const batchId = parts.length >= 4 ? (parseInt(parts[3].trim(), 10) || null) : null
   const expiryDate = parts.length >= 5 ? parts[4].trim() || null : null
 
-  return { kind: 'product', code, unitPrice, productName, batchId, expiryDate }
+  return { kind: 'product', code, unitPrice, productName, batchId, expiryDate, rawToken: s }
 }

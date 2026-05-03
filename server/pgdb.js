@@ -334,14 +334,19 @@ export async function getProducts(
     ? `
       LEFT JOIN product_warehouse_stock pws ON pws.product_id = p.id AND pws.warehouse_id = $1
       LEFT JOIN (
-        SELECT product_id,
-          MIN(purchase_price) AS purchase_price_min,
-          MAX(purchase_price) AS purchase_price_max,
-          MIN(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_min,
-          MAX(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_max,
-          COALESCE(SUM(CASE WHEN unit_type = 'bulk' THEN kg_remaining ELSE quantity END), 0) AS batch_total_quantity
-        FROM product_batches
-        GROUP BY product_id
+        SELECT pb.product_id,
+          MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_min,
+          MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_max,
+          MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_min,
+          MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_max,
+          COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
+        FROM product_batches pb
+        JOIN products p2 ON p2.id = pb.product_id
+        GROUP BY pb.product_id
       ) ba ON ba.product_id = p.id
       LEFT JOIN (
         SELECT bi.product_id,
@@ -355,14 +360,19 @@ export async function getProducts(
     : `
       LEFT JOIN (SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id) s ON s.product_id = p.id
       LEFT JOIN (
-        SELECT product_id,
-          MIN(purchase_price) AS purchase_price_min,
-          MAX(purchase_price) AS purchase_price_max,
-          MIN(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_min,
-          MAX(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_max,
-          COALESCE(SUM(CASE WHEN unit_type = 'bulk' THEN kg_remaining ELSE quantity END), 0) AS batch_total_quantity
-        FROM product_batches
-        GROUP BY product_id
+        SELECT pb.product_id,
+          MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_min,
+          MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_max,
+          MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_min,
+          MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_max,
+          COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
+        FROM product_batches pb
+        JOIN products p2 ON p2.id = pb.product_id
+        GROUP BY pb.product_id
       ) ba ON ba.product_id = p.id
       LEFT JOIN (
         SELECT bi.product_id,
@@ -1060,6 +1070,63 @@ export async function updateProduct(id, data) {
 }
 
 export async function deleteProduct(id) {
+  return deleteProductWithPolicy(id, { force: false })
+}
+
+async function getProductReferenceCounts(productId) {
+  const out = await pool.query(
+    `select
+       (select count(*)::int from invoice_items where product_id = $1) as invoice_items_count,
+       (select count(*)::int from supplier_purchase_items where product_id = $1) as supplier_purchase_items_count,
+       (select count(*)::int from return_items where product_id = $1) as return_items_count`,
+    [productId]
+  )
+  return out.rows?.[0] ?? {
+    invoice_items_count: 0,
+    supplier_purchase_items_count: 0,
+    return_items_count: 0,
+  }
+}
+
+export async function deleteProductWithPolicy(id, opts = {}) {
+  const force = !!opts.force
+  const refs = await getProductReferenceCounts(id)
+  const hasRefs =
+    Number(refs.invoice_items_count || 0) > 0 ||
+    Number(refs.supplier_purchase_items_count || 0) > 0 ||
+    Number(refs.return_items_count || 0) > 0
+
+  if (hasRefs && !force) {
+    const err = new Error('لا يمكن حذف هذا المنتج لوجود سجلات مرتبطة به. يمكنك أرشفة المنتج بدلاً من الحذف.')
+    err.code = 'PRODUCT_HAS_REFERENCES'
+    err.can_force = true
+    err.references = refs
+    throw err
+  }
+
+  if (force) {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `DELETE FROM return_items
+         WHERE invoice_item_id IN (SELECT id FROM invoice_items WHERE product_id = $1)
+            OR batch_id IN (SELECT id FROM product_batches WHERE product_id = $1)`,
+        [id]
+      )
+      await client.query('DELETE FROM invoice_items WHERE product_id = $1', [id])
+      await client.query('DELETE FROM supplier_purchase_items WHERE product_id = $1', [id])
+      await client.query('DELETE FROM products WHERE id = $1', [id])
+      await client.query('COMMIT')
+      return
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+  }
+
   await pool.query('DELETE FROM products WHERE id = $1', [id])
 }
 

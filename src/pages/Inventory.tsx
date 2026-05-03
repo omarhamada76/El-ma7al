@@ -3,7 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { Plus, Package, Search, ArrowLeft, Pencil, Trash2, ChevronRight, ChevronLeft, FileText, X } from 'lucide-react'
 import { getProducts, createProduct, updateProduct, deleteProduct, getWarehouseStockMap } from '@/api/products'
-import type { Product } from '@/types/api'
+import { ApiError } from '@/api/client'
+import type { Product, ProductBatch, BagInstance } from '@/types/api'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions, createCategory } from '@/api/categories'
 import { cn, formatCurrency, formatNumber, normalizeSearchText } from '@/lib/utils'
@@ -39,7 +40,8 @@ export default function Inventory() {
   const [search, setSearch] = useState('')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [inventoryCelebrate, setInventoryCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; product: Product } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; product: any } | null>(null)
+  const [archiveConfirmProduct, setArchiveConfirmProduct] = useState<Product | null>(null)
   const [editProduct, setEditProduct] = useState<Product | null>(null)
   const [warehouseId, setWarehouseId] = useState<number | undefined>(() => {
     const saved = getLastWarehouseId()
@@ -151,15 +153,36 @@ export default function Inventory() {
     },
   })
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteProduct(String(id)),
+    mutationFn: ({ id, force }: { id: number; force?: boolean }) => deleteProduct(String(id), force),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
       setContextMenu(null)
+      setArchiveConfirmProduct(null)
       setInventoryCelebrate({ title: 'تم حذف المنتج بنجاح' })
     },
+    onError: (err: any) => {
+      const msg = err instanceof Error ? err.message : 'تعذر حذف المنتج'
+      const canOfferArchiveOrForce =
+        err instanceof ApiError
+          ? err.code === 'PRODUCT_HAS_REFERENCES' || !!err.can_force
+          : msg.includes('سجلات') || msg.includes('force')
+      if (canOfferArchiveOrForce) {
+        setArchiveConfirmProduct(contextMenu?.product || null)
+      } else {
+        setErrorMessage(msg)
+      }
+    },
+  })
+  const archiveMutation = useMutation({
+    mutationFn: (id: number) => updateProduct(String(id), { is_active: false } as Partial<Product>),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      setArchiveConfirmProduct(null)
+      setInventoryCelebrate({ title: 'تم أرشفة المنتج بنجاح' })
+    },
     onError: (err) => {
-      setErrorMessage(err instanceof Error ? err.message : 'تعذر حذف المنتج')
+      setErrorMessage(err instanceof Error ? err.message : 'تعذر أرشفة المنتج')
     },
   })
   const createCategoryMutation = useMutation({
@@ -188,7 +211,7 @@ export default function Inventory() {
       getProducts({
         page,
         limit: 50,
-        search: productIdsParam ? undefined : (normalizeSearchText(search) || undefined),
+        search: normalizeSearchText(search) || undefined,
         category: productIdsParam ? undefined : (category === '' ? undefined : category),
         warehouse_id: productIdsParam ? undefined : warehouseId,
         low_stock: productIdsParam ? false : listFilter === 'low_stock',
@@ -291,7 +314,14 @@ export default function Inventory() {
         durationMs={1500}
         onComplete={() => setInventoryCelebrate(null)}
       />
-      {errorMessage && <FeedbackBanner type="error" message={errorMessage} />}
+      {errorMessage && (
+        <FeedbackBanner
+          type="error"
+          message={errorMessage}
+          fixed
+          className="z-[220]"
+        />
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-xl sm:text-2xl font-bold">المخزون</h1>
         <div className="flex gap-2">
@@ -329,7 +359,7 @@ export default function Inventory() {
                   a.click()
                   document.body.removeChild(a)
                   URL.revokeObjectURL(url)
-                  
+
                   setInventoryCelebrate({ title: 'تم إنشاء ملف PDF بنجاح' })
                 } catch (err) {
                   setErrorMessage('فشل إنشاء ملف PDF')
@@ -393,7 +423,7 @@ export default function Inventory() {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="بحث بالاسم أو الفئة..."
+            placeholder="بحث بالاسم، الفئة أو رقم المنتج..."
             className="w-full py-2 ps-12 pe-4 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
           />
         </div>
@@ -497,9 +527,29 @@ export default function Inventory() {
             ))}
           </div>
         ) : products.length === 0 ? (
-          <p className="p-8 text-center text-gray-500 dark:text-gray-400">
-            لا توجد منتجات. أضف منتجاً أو سجّل استلاماً من مورد.
-          </p>
+          <div className="p-12 text-center">
+            <div className="mx-auto w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
+              <Package className="w-8 h-8 text-gray-400" />
+            </div>
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-1">لا توجد منتجات</h3>
+            <p className="text-gray-500 dark:text-gray-400 max-w-xs mx-auto text-sm">
+              {search || category || listFilter !== 'all'
+                ? 'لم نعثر على أي منتجات تطابق اختياراتك الحالية.'
+                : 'ابدأ بإضافة أول منتج للمخزون أو سجل استلام بضاعة.'}
+            </p>
+            {(warehouseId || category || listFilter !== 'all') && (
+              <button
+                onClick={() => {
+                  setWarehouseId(undefined)
+                  setCategory('')
+                  applyListFilter('all')
+                }}
+                className="mt-4 text-primary-600 hover:text-primary-700 font-medium text-sm"
+              >
+                عرض جميع المخازن والأصناف
+              </button>
+            )}
+          </div>
         ) : (
           <div className={cn("responsive-table-container transition-opacity duration-200", isFetching && "opacity-50 pointer-events-none")}>
             <table className="responsive-table">
@@ -537,7 +587,7 @@ export default function Inventory() {
                   // Stock: use batch_total_quantity when available, else warehouse map
                   const batchQty = p.batch_total_quantity ?? null
                   /** Same pattern as «سعر الشراء»: batch min/max when present, else product default or «تحديد السعر». */
-                  const sellingPriceCellContent = hasBatchSP ? (
+                  const sellingPriceCellContent = (hasBatchSP && (spMin! > 0 || spMax! > 0)) ? (
                     spIsSingle ? (
                       formatCurrency(spMin!)
                     ) : (
@@ -551,205 +601,217 @@ export default function Inventory() {
                     <span className="text-amber-600">تحديد السعر</span>
                   )
                   return (
-                  <tr
-                    key={p.id}
-                    className={cn(
-                      'border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30',
-                      /* Top-align row while editing so price cells line up (align-middle vs uneven cell heights skews inputs) */
-                      editPriceId === p.id && '[&>td]:!align-top'
-                    )}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, product: p })
-                    }}
-                  >
-                    <td className="py-2 px-4">
-                      <div className="flex items-center gap-3">
-                        <div className="relative group shrink-0">
-                          {p.image_url ? (
-                            <img
-                              src={p.image_url}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              className="h-12 w-12 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm transition-transform duration-200 group-hover:scale-[2.5] group-hover:z-50 group-hover:relative group-hover:shadow-xl group-hover:ring-4 group-hover:ring-white dark:group-hover:ring-gray-800"
-                            />
-                          ) : (
-                            <div
-                              className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400"
-                              aria-hidden
-                            >
-                              <Package className="h-5 w-5" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-col min-w-0">
-                          <Link
-                            to={`/inventory/products/${p.id}`}
-                            className="font-bold text-gray-900 dark:text-gray-100 hover:text-primary-600 dark:hover:text-primary-400 transition-colors truncate"
-                          >
-                            {p.name}
-                          </Link>
-                          <span className="text-xs text-gray-500 dark:text-gray-400 sm:hidden">
-                            {p.category ?? '—'}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-2 px-4 text-gray-500 dark:text-gray-400 hidden sm:table-cell">
-                      {p.category ?? '—'}
-                    </td>
-                    <td
+                    <tr
+                      key={p.id}
                       className={cn(
-                        'py-2 px-4 align-middle',
-                        editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                        'border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30',
+                        /* Top-align row while editing so price cells line up (align-middle vs uneven cell heights skews inputs) */
+                        editPriceId === p.id && '[&>td]:!align-top'
                       )}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setContextMenu({ x: e.clientX, y: e.clientY, product: p })
+                      }}
                     >
-                      {editPriceId === p.id ? (
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          value={editPurchasePriceVal}
-                          onChange={(e) => setEditPurchasePriceVal(e.target.value)}
-                          autoFocus
-                          placeholder="شراء"
-                          inputMode="decimal"
-                          className="h-9 w-full min-w-[4.5rem] max-w-[6.5rem] rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800"
-                        />
-                      ) : hasBatchPP ? (
-                        ppIsSingle
-                          ? formatCurrency(ppMin)
-                          : <span>{formatCurrency(ppMin)} — {formatCurrency(ppMax)}</span>
-                      ) : (
-                        formatCurrency(p.purchase_price)
-                      )}
-                    </td>
-                    <td className="py-2 px-4 align-middle">
-                      {editPriceId === p.id ? (
-                        <form
-                          className="flex flex-row flex-wrap items-center gap-x-2 gap-y-1.5"
-                          onSubmit={(e) => {
-                            e.preventDefault()
-                            const purchase = parseFloat(editPurchasePriceVal)
-                            const selling = parseFloat(editSellingPriceVal)
-                            if (!isNaN(purchase) && purchase >= 0 && !isNaN(selling) && selling >= 0) {
-                              const main = document.querySelector('main')
-                              if (main instanceof HTMLElement) {
-                                restoreInventoryScrollY.current = main.scrollTop
-                              }
-                              priceMutation.mutate({
-                                id: p.id,
-                                purchase_price: purchase,
-                                selling_price: selling,
-                              })
-                            }
-                          }}
-                        >
+                      <td className="py-2 px-4">
+                        <div className="flex items-center gap-3">
+                          <div className="relative group shrink-0">
+                            {p.image_url ? (
+                              <img
+                                src={p.image_url}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                className="h-12 w-12 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm transition-transform duration-200 group-hover:scale-[2.5] group-hover:z-50 group-hover:relative group-hover:shadow-xl group-hover:ring-4 group-hover:ring-white dark:group-hover:ring-gray-800"
+                              />
+                            ) : (
+                              <div
+                                className="flex h-12 w-12 items-center justify-center rounded-lg border border-dashed border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 text-gray-400"
+                                aria-hidden
+                              >
+                                <Package className="h-5 w-5" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <Link
+                              to={`/inventory/products/${p.id}`}
+                              className="font-bold text-gray-900 dark:text-gray-100 hover:text-primary-600 dark:hover:text-primary-400 transition-colors truncate"
+                            >
+                              <div className="font-medium text-gray-900 dark:text-white line-clamp-1">
+                                {p.name}{' '}
+                                <span className="text-gray-400 dark:text-gray-500 font-normal text-xs">
+                                  #{p.id}
+                                </span>
+                              </div>
+                            </Link>
+                            {p.barcode && (
+                              <span className="text-[10px] text-gray-400 font-mono -mt-0.5">
+                                {p.barcode}
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-500 dark:text-gray-400 sm:hidden">
+                              {p.category ?? '—'}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2 px-4 text-gray-500 dark:text-gray-400 hidden sm:table-cell">
+                        {p.category ?? '—'}
+                      </td>
+                      <td
+                        className={cn(
+                          'py-2 px-4 align-middle',
+                          editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                        )}
+                      >
+                        {editPriceId === p.id ? (
                           <input
                             type="number"
                             min={0}
                             step="any"
-                            value={editSellingPriceVal}
-                            onChange={(e) => setEditSellingPriceVal(e.target.value)}
-                            placeholder="بيع"
+                            value={editPurchasePriceVal}
+                            onChange={(e) => setEditPurchasePriceVal(e.target.value)}
+                            autoFocus
+                            placeholder="شراء"
                             inputMode="decimal"
-                            className="h-9 min-w-[4.5rem] max-w-[6.5rem] flex-1 rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800 sm:w-20 sm:flex-none sm:max-w-none"
+                            className="h-9 w-full min-w-[4.5rem] max-w-[6.5rem] rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800"
                           />
-                          <button
-                            type="submit"
-                            disabled={priceMutation.isPending}
-                            className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:pointer-events-none disabled:opacity-60 dark:bg-primary-500 dark:hover:bg-primary-400"
-                          >
-                            {priceMutation.isPending ? '…' : 'حفظ'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditPriceId(null)}
-                            disabled={priceMutation.isPending}
-                            className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/80"
-                          >
-                            إلغاء
-                          </button>
-                        </form>
-                      ) : batchRangePreventsInline ? (
-                        <span className="text-gray-800 dark:text-gray-200">{sellingPriceCellContent}</span>
-                      ) : (
-                        <button
-                          type="button"
-                          title={
-                            hasBatchSP || hasBatchPP
-                              ? 'يُحفَظ في قاعدة البيانات كسعر افتراضي للمنتج. لتعديل سعر كل دفعة استخدم صفحة التفاصيل.'
-                              : undefined
-                          }
-                          onClick={() => {
-                            setEditPriceId(p.id)
-                            setEditPurchasePriceVal(String(p.purchase_price ?? ''))
-                            setEditSellingPriceVal(String(p.selling_price ?? ''))
-                          }}
-                          className="hover:underline"
-                        >
-                          {sellingPriceCellContent}
-                        </button>
-                      )}
-                    </td>
-                    <td className="py-2 px-4">
-                      {warehouseId != null ? (
-                        <div className="flex flex-col items-end gap-0.5">
-                          <span className="inline-flex items-center gap-1 flex-wrap justify-end">
-                            {p.unit_type === 'bulk' ? (
-                              <>
-                                {formatNumber(Number(p.warehouse_stock ?? 0), 2)} كيلو
-                                {p.bulk_bag_count != null && p.bulk_bag_count > 0 && (
-                                  <span className="text-gray-500 dark:text-gray-400 text-xs">
-                                    ({p.bulk_bag_count} شكارة)
-                                  </span>
-                                )}
-                                {p.bulk_open_bag_low && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
-                                    الشكارة المفتوحة على وشك الانتهاء
-                                  </span>
-                                )}
-                              </>
-                            ) : (
-                              p.warehouse_stock ?? 0
-                            )}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const wh = warehouses.find((w) => w.id === warehouseId)
-                              setStockEdit({
-                                product: p,
-                                warehouseId,
-                                warehouseName: wh?.name_ar ?? '',
-                                currentQuantity: p.warehouse_stock ?? 0,
-                              })
+                        ) : (hasBatchPP && (ppMin! > 0 || ppMax! > 0)) ? (
+                          ppIsSingle
+                            ? formatCurrency(ppMin!)
+                            : <span>{formatCurrency(ppMin!)} — {formatCurrency(ppMax!)}</span>
+                        ) : p.purchase_price > 0 ? (
+                          formatCurrency(p.purchase_price)
+                        ) : (
+                          <span className="text-gray-400">---</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-4 align-middle">
+                        {editPriceId === p.id ? (
+                          <form
+                            className="flex flex-row flex-wrap items-center gap-x-2 gap-y-1.5"
+                            onSubmit={(e) => {
+                              e.preventDefault()
+                              const purchase = parseFloat(editPurchasePriceVal)
+                              const selling = parseFloat(editSellingPriceVal)
+                              if (!isNaN(purchase) && purchase >= 0 && !isNaN(selling) && selling >= 0) {
+                                const main = document.querySelector('main')
+                                if (main instanceof HTMLElement) {
+                                  restoreInventoryScrollY.current = main.scrollTop
+                                }
+                                priceMutation.mutate({
+                                  id: p.id,
+                                  purchase_price: purchase,
+                                  selling_price: selling,
+                                })
+                              }
                             }}
-                            className="text-primary-600 dark:text-primary-400 hover:underline text-sm font-medium"
                           >
-                            تعديل
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={editSellingPriceVal}
+                              onChange={(e) => setEditSellingPriceVal(e.target.value)}
+                              placeholder="بيع"
+                              inputMode="decimal"
+                              className="h-9 min-w-[4.5rem] max-w-[6.5rem] flex-1 rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800 sm:w-20 sm:flex-none sm:max-w-none"
+                            />
+                            <button
+                              type="submit"
+                              disabled={priceMutation.isPending}
+                              className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:pointer-events-none disabled:opacity-60 dark:bg-primary-500 dark:hover:bg-primary-400"
+                            >
+                              {priceMutation.isPending ? '…' : 'حفظ'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditPriceId(null)}
+                              disabled={priceMutation.isPending}
+                              className="inline-flex h-9 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/80"
+                            >
+                              إلغاء
+                            </button>
+                          </form>
+                        ) : batchRangePreventsInline ? (
+                          <span className="text-gray-800 dark:text-gray-200">{sellingPriceCellContent}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            title={
+                              hasBatchSP || hasBatchPP
+                                ? 'يُحفَظ في قاعدة البيانات كسعر افتراضي للمنتج. لتعديل سعر كل دفعة استخدم صفحة التفاصيل.'
+                                : undefined
+                            }
+                            onClick={() => {
+                              setEditPriceId(p.id)
+                              setEditPurchasePriceVal(String(p.purchase_price ?? ''))
+                              setEditSellingPriceVal(String(p.selling_price ?? ''))
+                            }}
+                            className="hover:underline"
+                          >
+                            {sellingPriceCellContent}
                           </button>
-                        </div>
-                      ) : (
-                        <span>
-                          {p.unit_type === 'bulk'
-                            ? `${formatNumber(Number(batchQty ?? 0), 2)} كجم`
-                            : formatNumber(Number(batchQty ?? 0), 0)}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2 px-4">
-                      <Link
-                        to={`/inventory/products/${p.id}`}
-                        className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline"
-                      >
-                        <Package className="w-4 h-4" />
-                        تفاصيل
-                        <ArrowLeft className="w-4 h-4" />
-                      </Link>
-                    </td>
-                  </tr>
+                        )}
+                      </td>
+                      <td className="py-2 px-4">
+                        {warehouseId != null ? (
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className="inline-flex items-center gap-1 flex-wrap justify-end">
+                              {p.unit_type === 'bulk' ? (
+                                <>
+                                  {formatNumber(Number(p.warehouse_stock ?? 0), 2)} كيلو
+                                  {p.bulk_bag_count != null && p.bulk_bag_count > 0 && (
+                                    <span className="text-gray-500 dark:text-gray-400 text-xs">
+                                      ({p.bulk_bag_count} شكارة)
+                                    </span>
+                                  )}
+                                  {p.bulk_open_bag_low && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-100">
+                                      الشكارة المفتوحة على وشك الانتهاء
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                p.warehouse_stock ?? 0
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const wh = warehouses.find((w) => w.id === warehouseId)
+                                setStockEdit({
+                                  product: p,
+                                  warehouseId,
+                                  warehouseName: wh?.name_ar ?? '',
+                                  currentQuantity: p.warehouse_stock ?? 0,
+                                })
+                              }}
+                              className="text-primary-600 dark:text-primary-400 hover:underline text-sm font-medium"
+                            >
+                              تعديل
+                            </button>
+                          </div>
+                        ) : (
+                          <span>
+                            {p.unit_type === 'bulk'
+                              ? `${formatNumber(Number(batchQty ?? 0), 2)} كجم`
+                              : formatNumber(Number(batchQty ?? 0), 0)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-4">
+                        <Link
+                          to={`/inventory/products/${p.id}`}
+                          className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline"
+                        >
+                          <Package className="w-4 h-4" />
+                          تفاصيل
+                          <ArrowLeft className="w-4 h-4" />
+                        </Link>
+                      </td>
+                    </tr>
                   )
                 })}
               </tbody>
@@ -789,22 +851,46 @@ export default function Inventory() {
           items={
             contextMenu
               ? [
-                  {
-                    label: 'تعديل',
-                    icon: <Pencil className="w-4 h-4" />,
-                    onClick: () => setEditProduct(contextMenu.product),
+                {
+                  label: 'تعديل السعر',
+                  icon: <FileText className="w-4 h-4" />,
+                  onClick: () => {
+                    setEditPriceId(contextMenu.product.id)
+                    setEditPurchasePriceVal(String(contextMenu.product.purchase_price))
+                    setEditSellingPriceVal(String(contextMenu.product.selling_price))
+                    setContextMenu(null)
+                  }
+                },
+                {
+                  label: 'تعديل',
+                  icon: <Pencil className="w-4 h-4" />,
+                  onClick: () => setEditProduct(contextMenu.product),
+                },
+                {
+                  label: contextMenu.product.is_active ? 'أرشفة' : 'استعادة',
+                  icon: <FileText className="w-4 h-4" />,
+                  onClick: () => {
+                    if (contextMenu.product.is_active) {
+                      archiveMutation.mutate(contextMenu.product.id)
+                    } else {
+                      updateMutation.mutate({ id: contextMenu.product.id, body: { is_active: true } })
+                    }
+                    setContextMenu(null)
+                  }
+                },
+                {
+                  label: 'حذف',
+                  icon: <Trash2 className="w-4 h-4" />,
+                  danger: true,
+                  onClick: () => {
+                    const prod = contextMenu.product
+                    if (window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) {
+                      deleteMutation.mutate({ id: prod.id })
+                    }
+                    setContextMenu(null)
                   },
-                  {
-                    label: 'حذف',
-                    icon: <Trash2 className="w-4 h-4" />,
-                    danger: true,
-                    onClick: () => {
-                      if (window.confirm('هل أنت متأكد من حذف هذا المنتج؟')) {
-                        deleteMutation.mutate(contextMenu.product.id)
-                      }
-                    },
-                  },
-                ]
+                },
+              ]
               : []
           }
         />
@@ -840,6 +926,51 @@ export default function Inventory() {
               setInventoryCelebrate({ title: 'تم تحديث الكمية بنجاح' })
             }}
           />
+        )}
+        {archiveConfirmProduct && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6 animate-in zoom-in-95 duration-200" dir="rtl">
+              <div className="flex items-center gap-3 text-amber-600 mb-4">
+                <div className="p-2 bg-amber-50 dark:bg-amber-900/30 rounded-lg">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold">تعذر الحذف</h3>
+              </div>
+              <p className="text-gray-600 dark:text-gray-400 mb-6 text-sm leading-relaxed">
+                لا يمكن حذف المنتج "{archiveConfirmProduct.name}" لوجود سجلات مرتبطة به.
+              </p>
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={() => archiveMutation.mutate(archiveConfirmProduct.id)}
+                  disabled={archiveMutation.isPending || deleteMutation.isPending}
+                  className="w-full px-4 py-2.5 bg-primary-600 text-white rounded-lg font-bold hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {archiveMutation.isPending ? 'جاري الأرشفة...' : 'نعم، قم بالأرشفة (خيار آمن)'}
+                </button>
+
+                {isSuperAdmin && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`تنبيه: سيتم مسح كافة الفواتير والسجلات المرتبطة بالمنتج "${archiveConfirmProduct.name}". هذا الإجراء غير قابل للتراجع. هل أنت متأكد؟`)) {
+                        deleteMutation.mutate({ id: archiveConfirmProduct.id, force: true })
+                      }
+                    }}
+                    disabled={deleteMutation.isPending || archiveMutation.isPending}
+                    className="w-full px-4 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg font-bold hover:bg-red-100 dark:hover:bg-red-900/30 disabled:opacity-50"
+                  >
+                    {deleteMutation.isPending ? 'جاري الحذف القسري...' : 'حذف قسري (مسح التاريخ)'}
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setArchiveConfirmProduct(null)}
+                  className="w-full px-4 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg font-bold hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

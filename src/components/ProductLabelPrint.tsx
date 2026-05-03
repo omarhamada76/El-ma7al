@@ -46,11 +46,13 @@ function LabelStickerBody({
   expiryShort,
   warnExpiry,
   shortCode,
+  product,
 }: {
   barcodeValue: string
   expiryShort: string | null
   warnExpiry: boolean
   shortCode: string | null
+  product: Product
 }) {
   return (
     <div
@@ -62,6 +64,7 @@ function LabelStickerBody({
         justifyContent: 'center',
         alignItems: 'center',
         textAlign: 'center',
+        paddingLeft: '8mm',
         boxSizing: 'border-box',
         overflow: 'hidden',
         transform: `translateX(${HORIZONTAL_OFFSET_MM}mm)`,
@@ -70,47 +73,38 @@ function LabelStickerBody({
       <div style={{ position: 'relative', display: 'inline-block', lineHeight: 0 }}>
         <Barcode
           value={barcodeValue}
-          width={1.5}
-          height={35}
+          width={1.3}
+          height={55}
+          margin={5}
           displayValue={false}
         />
-        {shortCode && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              background: 'white',
-              padding: '0 6px',
-              fontSize: '13pt',
-              fontWeight: 700,
-              fontFamily: 'monospace, "Courier New"',
-              letterSpacing: '2px',
-              zIndex: 10,
-              lineHeight: 1,
-            }}
-          >
-            {shortCode}
+      </div>
+
+      <div
+        style={{
+          marginTop: '1mm',
+          display: 'flex',
+          flexDirection: 'row',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: '4mm',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          lineHeight: 1,
+          color: '#000000',
+          fontSize: '13pt',
+          fontWeight: 800,
+          letterSpacing: '0.5px',
+        }}
+      >
+        <div style={{ whiteSpace: 'nowrap' }}>
+          {product.id}
+        </div>
+        {expiryShort && (
+          <div style={{ color: warnExpiry ? '#b91c1c' : 'inherit', whiteSpace: 'nowrap' }}>
+            {expiryShort}
           </div>
         )}
       </div>
-
-      {expiryShort && (
-        <div
-          style={{
-            marginTop: '1mm',
-            fontSize: '12pt',
-            fontWeight: warnExpiry ? 750 : 600,
-            lineHeight: 1,
-            whiteSpace: 'nowrap',
-            color: warnExpiry ? '#b91c1c' : '#1f2937',
-            fontFamily: 'monospace, "Courier New"',
-          }}
-        >
-          {expiryShort}
-        </div>
-      )}
     </div>
   )
 }
@@ -241,6 +235,7 @@ export default function ProductLabelPrint({
                   expiryShort={expiryShort}
                   warnExpiry={warnExpiry}
                   shortCode={shortCode}
+                  product={product}
                 />
               </div>
               <div className="w-full">
@@ -250,6 +245,7 @@ export default function ProductLabelPrint({
                     expiryShort={expiryShort}
                     warnExpiry={warnExpiry}
                     shortCode={shortCode}
+                    product={product}
                   />
                 ) : (
                   <div style={{ height: '25mm', width: '100%' }} />
@@ -273,6 +269,7 @@ export default function ProductLabelPrint({
                 expiryShort={expiryShort}
                 warnExpiry={warnExpiry}
                 shortCode={shortCode}
+                product={product}
               />
               {page[1] !== null ? (
                 <LabelStickerBody
@@ -280,6 +277,7 @@ export default function ProductLabelPrint({
                   expiryShort={expiryShort}
                   warnExpiry={warnExpiry}
                   shortCode={shortCode}
+                  product={product}
                 />
               ) : (
                 <div style={{ height: '25mm', width: '100%' }} />

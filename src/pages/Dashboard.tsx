@@ -23,6 +23,7 @@ import Modal from '@/components/Modal'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
 import { normalizeInvoiceScanToken, setInvoiceNewPendingBarcode } from '@/lib/barcodeLookup'
+import { playScanFeedback } from '@/lib/scanFeedback'
 
 type QuickActionBase = {
   key: string
@@ -363,19 +364,15 @@ export default function Dashboard() {
           </p>
           <input
             type="text"
+            data-scanner-input="true"
             placeholder="امسح الباركود هنا..."
             className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-primary-500"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                const v = (e.target as HTMLInputElement).value?.trim()
-                if (v) {
-                  ;(e.target as HTMLInputElement).value = ''
-                  const logical = normalizeInvoiceScanToken(v)
-                  setInvoiceNewPendingBarcode(logical)
-                  navigate(`/invoices/new?barcode=${encodeURIComponent(logical)}`)
-                }
-              }
-            }}
+            lang="en"
+            dir="ltr"
+            inputMode="text"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
           />
           <Modal
             open={accountStatementOpen}

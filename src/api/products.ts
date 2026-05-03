@@ -11,6 +11,7 @@ export interface ProductsParams {
   unpriced?: boolean
   expiring?: boolean
   ids?: string
+  show_archived?: boolean
 }
 
 export async function getProducts(params: ProductsParams = {}): Promise<{
@@ -106,8 +107,16 @@ export async function seedInitialBulkStockForProduct(
   return api.post(`/products/${id}/initial-bulk-stock`, body)
 }
 
-export async function deleteProduct(id: string): Promise<void> {
-  return api.delete(`/products/${id}`)
+export async function deleteProduct(id: string, force: boolean = false): Promise<void> {
+  return api.delete(`/products/${id}${force ? '?force=true' : ''}`)
+}
+
+export async function archiveProduct(id: string): Promise<Product> {
+  return updateProduct(id, { is_active: false } as Partial<Product>)
+}
+
+export async function restoreProduct(id: string): Promise<Product> {
+  return updateProduct(id, { is_active: true } as Partial<Product>)
 }
 
 export async function adjustStock(

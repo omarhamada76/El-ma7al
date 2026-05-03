@@ -35,6 +35,14 @@ export default function DashboardLayout() {
         }
         // New invoice page: never add to the quick-invoice store (wrong cart). Route through ?barcode=
         // so InvoiceNew runs a single scan — avoids duplicate lines when focus leaves the barcode field.
+        // If we're on inventory, just update the search filter instead of navigating away
+        if (location.pathname === '/inventory') {
+          const params = new URLSearchParams(window.location.search)
+          params.set('search', barcode)
+          navigate(`/inventory?${params.toString()}`, { replace: true })
+          return
+        }
+
         if (location.pathname === '/invoices/new') {
           const params = new URLSearchParams(location.search)
           params.set('barcode', logical)
@@ -49,8 +57,10 @@ export default function DashboardLayout() {
           }
         } catch (err) {
           const message =
-            err instanceof Error ? err.message : `Product not found for barcode "${barcode.trim()}"`
-          showToast(message, 'error', 6000)
+            err instanceof Error ? err.message : `لم يتم العثور على المنتج للباركود "${barcode.trim()}"`
+          // In dev/debug, show the raw string to help identify junk characters
+          const debugMsg = `${message} (Raw: "${barcode}")`
+          showToast(debugMsg, 'error', 8000)
         }
       })()
     },

@@ -42,6 +42,22 @@ function normalizeDecimalStrings<T>(value: T): T {
   return value
 }
 
+export class ApiError extends Error {
+  status: number
+  code?: string
+  can_force?: boolean
+  details?: unknown
+
+  constructor(message: string, status: number, opts?: { code?: string; can_force?: boolean; details?: unknown }) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = opts?.code
+    this.can_force = opts?.can_force
+    this.details = opts?.details
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getToken()
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -70,7 +86,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   })
   const readErrBody = async () => {
     try {
-      return (await res.json()) as { message?: string; error?: string; key?: string }
+      return (await res.json()) as { message?: string; error?: string; key?: string; code?: string; can_force?: boolean; references?: unknown }
     } catch {
       return {}
     }
@@ -96,7 +112,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     if (res.status === 404 && err.key) {
       msg = `${msg} (${err.key})`
     }
-    throw new Error(msg)
+    throw new ApiError(msg, res.status, {
+      code: err.code,
+      can_force: err.can_force,
+      details: err.references,
+    })
   }
   if (res.status === 204) return undefined as T
   const data = (await res.json()) as T
