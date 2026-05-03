@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import Barcode from '@/components/Barcode'
 import type { Product, ProductBatch, BagInstance } from '@/types/api'
 import { getBatchBarcodeValue, getBagBarcodeValue, isExpiryWithinDays } from '@/lib/scanCodes'
-import { formatNumber } from '@/lib/utils'
 
 export { parseScannedBarcode, getBatchBarcodeValue, getBagBarcodeValue } from '@/lib/scanCodes'
 
