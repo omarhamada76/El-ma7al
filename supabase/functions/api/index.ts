@@ -1285,7 +1285,10 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Removed is_active filtering as per user request
+      const show_archived = url.searchParams.get('show_archived') === 'true'
+      if (!show_archived) {
+        where.push('p.is_active = true')
+      }
 
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
       const total = await query(`select count(*)::int as c from products p ${whereSql}`, whereArgs)

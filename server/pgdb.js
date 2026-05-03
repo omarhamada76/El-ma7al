@@ -216,7 +216,7 @@ export async function getAllProductNames() {
   return r.rows.map((x) => x.name)
 }
 
-function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false }, startIdx = 1) {
+function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false }, startIdx = 1) {
   const clauses = []
   const params = []
   let idx = startIdx
@@ -282,6 +282,9 @@ function buildProductsFilterWhere({ search, category, warehouseId = null, lowSto
     params.push(category)
     idx += 1
   }
+  if (!showArchived) {
+    clauses.push('p.is_active = true')
+  }
 
   return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params, nextIndex: idx }
 }
@@ -292,7 +295,8 @@ export async function getProductCountFiltered(
   warehouseId = null,
   lowStock = false,
   unpriced = false,
-  expiring = false
+  expiring = false,
+  showArchived = false
 ) {
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
   const joins = whOk
@@ -305,6 +309,7 @@ export async function getProductCountFiltered(
     lowStock,
     unpriced,
     expiring,
+    showArchived,
   }, whOk ? 2 : 1)
   const params = whOk ? [warehouseId, ...filter.params] : [...filter.params]
   const q = await pool.query(
@@ -327,7 +332,8 @@ export async function getProducts(
   warehouseId = null,
   lowStock = false,
   unpriced = false,
-  expiring = false
+  expiring = false,
+  showArchived = false
 ) {
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
   const joins = whOk
@@ -391,6 +397,7 @@ export async function getProducts(
     lowStock,
     unpriced,
     expiring,
+    showArchived,
   }, whOk ? 2 : 1)
   const lim = Math.min(Number(limit) || 100, 500)
   const off = Math.max(0, Number(offset) || 0)
@@ -401,7 +408,7 @@ export async function getProducts(
     `
       SELECT p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date, 
-        p.image_url, p.notes, p.created_at, p.updated_at,
+        p.image_url, p.notes, p.is_active, p.created_at, p.updated_at,
         ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
         bgi.bulk_bag_count, bgi.bulk_open_bag_low
       FROM products p
@@ -444,7 +451,7 @@ export async function getProductsWithStockInWarehouse(warehouseId) {
         pws.quantity,
         p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
-        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at
+        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at, p.is_active
       FROM product_warehouse_stock pws
       JOIN products p ON p.id = pws.product_id
       WHERE pws.warehouse_id = $1 AND pws.quantity > 0
@@ -470,6 +477,7 @@ export async function getProductsWithStockInWarehouse(warehouseId) {
       notes: x.notes,
       created_at: x.created_at,
       updated_at: x.updated_at,
+      is_active: x.is_active,
     },
     stock: Number(x.quantity ?? 0),
   }))
@@ -483,7 +491,7 @@ export async function getProductsInWarehouse(warehouseId) {
         COALESCE(pws.quantity, 0) AS quantity,
         p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
-        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at
+        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at, p.is_active
       FROM products p
       LEFT JOIN product_warehouse_stock pws
         ON pws.product_id = p.id AND pws.warehouse_id = $1
@@ -509,6 +517,7 @@ export async function getProductsInWarehouse(warehouseId) {
       notes: x.notes,
       created_at: x.created_at,
       updated_at: x.updated_at,
+      is_active: x.is_active,
     },
     stock: Number(x.quantity ?? 0),
   }))
@@ -920,8 +929,8 @@ export async function createProduct(data) {
     const ins = await client.query(
       `
         INSERT INTO products
-        (name, company, category, barcode, unit_type, bag_weight_kg, purchase_price, selling_price, alert_level, alert_level_kg, expiry_date, image_url, notes, created_at, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,$12,NOW(),NOW())
+        (name, company, category, barcode, unit_type, bag_weight_kg, purchase_price, selling_price, alert_level, alert_level_kg, expiry_date, image_url, notes, is_active, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULL,$11,$12,$13,NOW(),NOW())
         RETURNING id
       `,
       [
@@ -937,6 +946,7 @@ export async function createProduct(data) {
         data.alert_level_kg != null && data.alert_level_kg !== '' ? Number(data.alert_level_kg) : null,
         imageUrl,
         data.notes ?? null,
+        data.is_active !== undefined ? data.is_active : true
       ]
     )
     const id = ins.rows[0].id
@@ -1043,6 +1053,7 @@ export async function updateProduct(id, data) {
     'expiry_date',
     'notes',
     'image_url',
+    'is_active',
   ]
   const sets = []
   const vals = []
