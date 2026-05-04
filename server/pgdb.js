@@ -216,7 +216,7 @@ export async function getAllProductNames() {
   return r.rows.map((x) => x.name)
 }
 
-function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false }, startIdx = 1) {
+function buildProductsFilterWhere({ search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false, expired = false, showArchived = false }, startIdx = 1) {
   const clauses = []
   const params = []
   let idx = startIdx
@@ -247,7 +247,7 @@ function buildProductsFilterWhere({ search, category, warehouseId = null, lowSto
       OR EXISTS (
         SELECT 1 FROM product_batches pbx
         WHERE pbx.product_id = p.id
-          ${warehouseId != null && Number.isInteger(warehouseId) ? 'AND pbx.warehouse_id = pws.warehouse_id' : ''}
+          ${warehouseId != null && Number.isInteger(warehouseId) ? 'AND pbx.warehouse_id = $1' : ''}
           AND pbx.expiry_date IS NOT NULL
           AND pbx.expiry_date != DATE '9999-12-31'
           AND pbx.expiry_date >= CURRENT_DATE
@@ -259,6 +259,26 @@ function buildProductsFilterWhere({ search, category, warehouseId = null, lowSto
       )
     )`
     clauses.push(expClause)
+  } else if (expired) {
+    const expiredClause = `(
+      (
+        p.expiry_date IS NOT NULL
+        AND p.expiry_date < CURRENT_DATE
+      )
+      OR EXISTS (
+        SELECT 1 FROM product_batches pbx
+        WHERE pbx.product_id = p.id
+          ${warehouseId != null && Number.isInteger(warehouseId) ? 'AND pbx.warehouse_id = $1' : ''}
+          AND pbx.expiry_date IS NOT NULL
+          AND pbx.expiry_date != DATE '9999-12-31'
+          AND pbx.expiry_date < CURRENT_DATE
+          AND (
+            (COALESCE(pbx.unit_type, 'piece') = 'bulk' AND COALESCE(pbx.kg_remaining, 0) > 0)
+            OR (COALESCE(pbx.unit_type, 'piece') != 'bulk' AND COALESCE(pbx.quantity, 0) > 0)
+          )
+      )
+    )`
+    clauses.push(expiredClause)
   }
 
   if (search) {
@@ -296,7 +316,8 @@ export async function getProductCountFiltered(
   lowStock = false,
   unpriced = false,
   expiring = false,
-  showArchived = false
+  showArchived = false,
+  expired = false
 ) {
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
   const joins = whOk
@@ -310,6 +331,7 @@ export async function getProductCountFiltered(
     unpriced,
     expiring,
     showArchived,
+    expired,
   }, whOk ? 2 : 1)
   const params = whOk ? [warehouseId, ...filter.params] : [...filter.params]
   const q = await pool.query(
@@ -333,7 +355,8 @@ export async function getProducts(
   lowStock = false,
   unpriced = false,
   expiring = false,
-  showArchived = false
+  showArchived = false,
+  expired = false
 ) {
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
   const joins = whOk
@@ -398,6 +421,7 @@ export async function getProducts(
     unpriced,
     expiring,
     showArchived,
+    expired,
   }, whOk ? 2 : 1)
   const lim = Math.min(Number(limit) || 100, 500)
   const off = Math.max(0, Number(offset) || 0)
@@ -409,6 +433,7 @@ export async function getProducts(
       SELECT p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date, 
         p.image_url, p.notes, p.is_active, p.created_at, p.updated_at,
+        ${whOk ? 'COALESCE(pws.quantity, 0)' : 'COALESCE(s.q, 0)'} AS warehouse_stock,
         ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
         bgi.bulk_bag_count, bgi.bulk_open_bag_low
       FROM products p
@@ -1699,6 +1724,7 @@ export async function createSupplierPayment(data) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+
     const paymentDate = data.payment_date || nowIso().slice(0, 10)
     const ins = await client.query(
       `
@@ -1799,8 +1825,12 @@ export async function getDashboardStats(opts = {}) {
     (await pool.query('SELECT COALESCE(SUM(amount),0) AS s FROM supplier_payments')).rows[0]?.s ?? 0
   )
   const safeBalance = await getSafeBalance()
+  const primaryWh = (await pool.query(
+    "SELECT id FROM warehouses WHERE name_ar LIKE '%اجهور%' OR name_ar LIKE '%أجهور%' OR name_en ILIKE '%aghour%' LIMIT 1"
+  )).rows[0]
+  const primaryWhId = primaryWh?.id ?? 1
   const productCount = Number(
-    (await pool.query('SELECT COUNT(*)::int AS n FROM products')).rows[0]?.n ?? 0
+    (await pool.query('SELECT COUNT(*)::int AS n FROM product_warehouse_stock WHERE warehouse_id = $1 AND COALESCE(quantity,0) > 0', [primaryWhId])).rows[0]?.n ?? 0
   )
   const clientsCount = Number(
     (await pool.query('SELECT COUNT(*)::int AS n FROM clients')).rows[0]?.n ?? 0

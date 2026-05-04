@@ -146,7 +146,7 @@ export default function InvoiceNew() {
 
   // Batch picker modal state
   const [batchPickerOpen, setBatchPickerOpen] = useState(false)
-  const [batchPickerProduct, setBatchPickerProduct] = useState<{ id: number; name: string; stock: number; selling_price?: number } | null>(null)
+  const [batchPickerProduct, setBatchPickerProduct] = useState<{ id: number; name: string; stock: number; selling_price?: number; purchase_price?: number } | null>(null)
   const [batchPickerBatches, setBatchPickerBatches] = useState<ProductBatch[]>([])
 
   const { data: invoiceToEdit, isLoading: invoiceEditLoading } = useQuery({
@@ -717,7 +717,7 @@ export default function InvoiceNew() {
     }
 
     // Multiple batches — open picker
-    setBatchPickerProduct({ id: product.id, name: product.name, stock, selling_price: product.selling_price })
+    setBatchPickerProduct({ id: product.id, name: product.name, stock, selling_price: product.selling_price, purchase_price: product.purchase_price })
     setBatchPickerBatches(activeBatches)
     setBatchPickerOpen(true)
   }
@@ -805,93 +805,58 @@ export default function InvoiceNew() {
       const itemsSnap = itemsRef.current
 
       if (parsed.kind === 'batch') {
-        // AMBIGUITY RESOLUTION: If it's a pure numeric code (not B-prefixed),
-        // check if it matches a product barcode in this warehouse FIRST.
+        const raw = trimmed
+        const batchId = parsed.batchId
+
+        // RANKED RESOLUTION (Mirroring Inventory Search ranking)
+        // 1. Exact string match for Product ID in this warehouse
+        const prodById = !parsed.isExplicit ? productsWithStock.find(p => String(p.product.id) === raw) : null
+
+        // 2. Exact string match for Barcode in this warehouse
+        const prodByBarcode = !parsed.isExplicit ? productsWithStock.find(p => (p.product.barcode || '').trim() === raw) : null
+
+        // 3. Match as a Batch ID in this warehouse
+        let batch: ProductBatch | undefined = warehouseBatches.find((b) => Number(b.id) === Number(batchId))
+
+        // AMBIGUITY RESOLUTION: Only apply fallbacks if it's not an explicit "B..." scan
         if (!parsed.isExplicit) {
-          const fallbackToken = parsed.rawToken || trimmed
-          const numericToken = /^\d+$/.test(fallbackToken) ? String(Number(fallbackToken)) : fallbackToken
-
-          const prodEntry = productsWithStock.find(
-            (p) => {
-              const b = (p.product.barcode || '').trim()
-              const normB = normalizeArabicNumbers(b).trim()
-              const pid = String(p.product.id)
-              return (
-                b === fallbackToken ||
-                b === numericToken ||
-                normB === fallbackToken ||
-                normB === numericToken ||
-                pid === fallbackToken ||
-                pid === numericToken
-              )
-            }
-          )
-
-          if (prodEntry) {
-            if (import.meta.env.DEV) console.log('[InvoiceNew] Ambiguous numeric scan resolved to product in this warehouse:', prodEntry.product.name)
-            void addProductToInvoice(prodEntry)
+          if (prodById) {
+            if (import.meta.env.DEV) console.log('[InvoiceNew] Numeric scan resolved to exact Product ID match:', prodById.product.name)
+            void addProductToInvoice(prodById)
+            return true
+          }
+          if (prodByBarcode) {
+            if (import.meta.env.DEV) console.log('[InvoiceNew] Numeric scan resolved to exact Barcode match:', prodByBarcode.product.name)
+            void addProductToInvoice(prodByBarcode)
             return true
           }
         }
 
-        // 1. Try to find in the current warehouse local list first
-        let batch: ProductBatch | undefined = warehouseBatches.find((b) => Number(b.id) === Number(parsed.batchId))
-
         if (!batch) {
-          // 2. Not in local list, look it up globally
-          const looked = await lookupProductBatchById(parsed.batchId)
+          // 4. Not in local list/product fallback, look it up globally
+          const looked = await lookupProductBatchById(batchId)
           if (looked.status === 'ok') {
             // Check warehouse mismatch
             if (Number(looked.batch.warehouse_id) !== Number(warehouseId)) {
-              // AMBIGUITY CHECK: If it's a numeric code (not B-prefixed), maybe it's ALSO a product barcode in this warehouse?
+              // Secondary fallback: if it's a numeric code, maybe it's ALSO a product barcode/ID in this warehouse?
               if (!parsed.isExplicit) {
-                const fallbackToken = parsed.rawToken || trimmed
-                const numericToken = /^\d+$/.test(fallbackToken) ? String(Number(fallbackToken)) : fallbackToken
-                const prodEntry = productsWithStock.find(
-                  (p) => {
-                    const b = (p.product.barcode || '').trim()
-                    const normB = normalizeArabicNumbers(b).trim()
-                    const pid = String(p.product.id)
-                    return (
-                      b === fallbackToken ||
-                      b === numericToken ||
-                      normB === fallbackToken ||
-                      normB === numericToken ||
-                      pid === fallbackToken ||
-                      pid === numericToken
-                    )
-                  }
-                )
+                const prodEntry = productsWithStock.find(p => String(p.product.id) === raw || (p.product.barcode || '').trim() === raw)
                 if (prodEntry) {
                   void addProductToInvoice(prodEntry)
                   return true
                 }
               }
 
-              setScanError(`الدفعة #${parsed.batchId} مسجّلة في مخزن آخر — غيّر المخزن أو امسح ملصقاً من هذا المخزن.`)
+              setScanError(`الدفعة #${batchId} مسجّلة في مخزن آخر — غيّر المخزن أو امسح ملصقاً من هذا المخزن.`)
               return false
             }
             batch = looked.batch
           } else if (looked.status === 'not_found' && !parsed.isExplicit) {
-            // FALLBACK: If not a batch and not B-prefixed, maybe it's a product barcode (e.g. short 4-digit code like 0418)
-            const fallbackToken = parsed.rawToken || trimmed
-            const numericToken = /^\d+$/.test(fallbackToken) ? String(Number(fallbackToken)) : fallbackToken
-            if (import.meta.env.DEV) console.log('[InvoiceNew] Batch not found, falling back to product search for:', { fallbackToken, numericToken })
-
-            const prodEntry = productsWithStock.find(
-              (p) => {
-                const b = (p.product.barcode || '').trim()
-                const normB = normalizeArabicNumbers(b).trim()
-                const pid = String(p.product.id)
-                return (
-                  b === fallbackToken ||
-                  b === numericToken ||
-                  normB === fallbackToken ||
-                  normB === numericToken ||
-                  pid === fallbackToken ||
-                  pid === numericToken
-                )
-              }
+            // Final fallback: try search for product anyway
+            const prodEntry = productsWithStock.find(p => 
+              String(p.product.id) === raw || 
+              (p.product.barcode || '').trim() === raw ||
+              (p.product.barcode && normalizeArabicNumbers(p.product.barcode).trim() === raw)
             )
             if (prodEntry) {
               void addProductToInvoice(prodEntry)
@@ -900,13 +865,13 @@ export default function InvoiceNew() {
 
             // Secondary fallback: check if product exists at all (might have 0 stock)
             try {
-              let productInfo = await getProductByBarcode(fallbackToken)
-              if (!productInfo && /^\d+$/.test(fallbackToken)) {
-                try { productInfo = await getProduct(fallbackToken) } catch { /* ignore */ }
+              let productInfo = await getProductByBarcode(raw)
+              if (!productInfo && /^\d+$/.test(raw)) {
+                try { productInfo = await getProduct(raw) } catch { /* ignore */ }
               }
 
               if (productInfo) {
-                setScanError(`المنتج "${productInfo.name}" مسجل بالرقم "${fallbackToken}" ولكن ليس له مخزون في هذا المخزن.`)
+                setScanError(`المنتج "${productInfo.name}" مسجل بالرقم "${raw}" ولكن ليس له مخزون في هذا المخزن.`)
                 return false
               }
             } catch (e) {
@@ -914,7 +879,7 @@ export default function InvoiceNew() {
             }
 
             setScanError(
-              `لا توجد دفعة أو منتج بالرقم "${fallbackToken}" في النظام. (Raw: "${raw}")`
+              `لا توجد دفعة أو منتج بالرقم "${raw}" في النظام. (Raw: "${raw}")`
             )
             return false
           } else {
@@ -972,7 +937,9 @@ export default function InvoiceNew() {
         if (existingIdx >= 0) {
           handleQuantityChange(existingIdx, itemsSnap[existingIdx].quantity + 1)
         } else {
-          const price = batch.selling_price ?? entry.product.selling_price
+          const price = (batch.selling_price != null && batch.selling_price > 0) 
+            ? batch.selling_price 
+            : entry.product.selling_price
           const isSentinel = !batch.expiry_date || batch.expiry_date === '9999-12-31'
           setItems((prev) => [
             ...prev,
@@ -1023,7 +990,11 @@ export default function InvoiceNew() {
           return false
         }
         const batchMeta = warehouseBatches.find((b) => Number(b.id) === Number(bag.batch_id))
-        const price = batchMeta?.selling_price ?? bag.selling_price ?? entry.product.selling_price
+        const price = (batchMeta?.selling_price != null && batchMeta.selling_price > 0)
+          ? batchMeta.selling_price
+          : (bag.selling_price != null && bag.selling_price > 0)
+            ? bag.selling_price
+            : entry.product.selling_price
         const isSentinel = !bag.expiry_date || bag.expiry_date === '9999-12-31'
         const existingIdx = itemsSnap.findIndex((i) => Number(i.bag_id) === Number(bag.id))
         if (existingIdx >= 0) {
@@ -1226,7 +1197,7 @@ export default function InvoiceNew() {
     e.preventDefault()
     setError('')
     setNotice('')
-    if (!clientId) {
+    if (!clientId && payment_method !== 'cash') {
       setError('اختر العميل')
       return
     }
@@ -1282,7 +1253,7 @@ export default function InvoiceNew() {
       return
     }
     const client = clients.find((c) => String(c.id) === clientId)
-    if (!client) {
+    if (!client && (payment_method !== 'cash' || clientId)) {
       setError('اختر عميلاً من القائمة أو أضف عميلاً جديداً')
       return
     }
@@ -1341,7 +1312,9 @@ export default function InvoiceNew() {
       updateMutation.mutate({
         id: editInvoiceId,
         body: {
-          customer_name: client.name,
+          client_id: clientId ? Number(clientId) : undefined,
+          barn_id: barnId ? Number(barnId) : undefined,
+          customer_name: client?.name || 'عميل نقدي',
           payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
           paid_amount: Math.round(effectivePaidAmount),
           register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
@@ -1360,12 +1333,14 @@ export default function InvoiceNew() {
       })
       return
     }
-    addRecentClient(Number(clientId))
+    if (clientId) {
+      addRecentClient(Number(clientId))
+    }
     createMutation.mutate({
-      client_id: Number(clientId),
+      client_id: clientId ? Number(clientId) : undefined,
       barn_id: barnId ? Number(barnId) : undefined,
       warehouse_id: Number(warehouseId),
-      customer_name: client.name,
+      customer_name: client?.name || 'عميل نقدي',
       payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
       paid_amount: Math.round(effectivePaidAmount),
       register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
@@ -1483,7 +1458,9 @@ export default function InvoiceNew() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <label className="block text-sm font-medium">العميل *</label>
+                  <label className="block text-sm font-medium">
+                    العميل {payment_method === 'cash' ? '(اختياري)' : '*'}
+                  </label>
                   {!isEdit && (
                     <button
                       type="button"
@@ -1959,7 +1936,9 @@ export default function InvoiceNew() {
                                           {breakdown.map((b, i) => (
                                             <span key={i}>
                                               {b.take}× صلاحية {formatExpiry(b.expiry_date)}
-                                              {b.selling_price != null && b.selling_price > 0 ? ` @ ${b.selling_price}` : ''}
+                                              {b.selling_price != null && b.selling_price > 0 
+                                                ? ` @ ${b.selling_price}` 
+                                                : ` @ ${pEntries?.product.selling_price} (افتراضي)`}
                                             </span>
                                           ))}
                                         </div>
@@ -2415,7 +2394,7 @@ export default function InvoiceNew() {
               createMutation.isPending ||
               updateMutation.isPending ||
               items.length === 0 ||
-              !clientId ||
+              (!clientId && payment_method !== 'cash') ||
               !warehouseId ||
               (isEdit && !formHydrated)
             }
@@ -2443,6 +2422,8 @@ export default function InvoiceNew() {
             setBatchPickerProduct(null)
           }}
           productName={batchPickerProduct.name}
+          productSellingPrice={batchPickerProduct.selling_price}
+          productPurchasePrice={batchPickerProduct.purchase_price}
           batches={batchPickerBatches}
           warehouseNames={Object.fromEntries(warehouses.map((w) => [w.id, w.name_ar]))}
           onSelect={handleBatchSelected}

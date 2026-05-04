@@ -1207,6 +1207,7 @@ Deno.serve(async (req) => {
       const low_stock = sp.get('low_stock') === 'true'
       const unpriced = sp.get('unpriced') === 'true'
       const expiring = sp.get('expiring') === 'true'
+      const expired = sp.get('expired') === 'true'
       const idsParam = sp.get('ids')
 
       // Helper for Arabic character normalization (Alef, Yaa, Teh Marbuta, Hamza)
@@ -1274,7 +1275,12 @@ Deno.serve(async (req) => {
         }
         if (expiring) {
           where.push(
-            `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date <= (now() + interval '30 days') and coalesce(b.quantity,0) > 0)`
+            `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date <= (now() + interval '30 days') and b.expiry_date >= now()::date and coalesce(b.quantity,0) > 0)`
+          )
+        }
+        if (expired) {
+          where.push(
+            `(p.expiry_date is not null and p.expiry_date != '9999-12-31' and p.expiry_date < now()::date) or exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date < now()::date and coalesce(b.quantity,0) > 0)`
           )
         }
         if (idsParam) {

@@ -113,9 +113,17 @@ export default function ReceiptNew() {
 
   const { data: productsData } = useQuery({
     queryKey: ['products', 'list'],
-    queryFn: () => getProducts({ limit: 2000 }),
+    queryFn: () => getProducts({ limit: 100 }), // Reduced limit since we now have active search
   })
   const products = productsData?.data ?? []
+
+  const { data: searchResultsData, isLoading: isSearchingProducts } = useQuery({
+    queryKey: ['products', 'search', productSearchQuery],
+    queryFn: () => getProducts({ search: normalizeSearchText(productSearchQuery), limit: 50 }),
+    enabled: productSearchQuery.trim().length > 0,
+  })
+  const searchResults = searchResultsData?.data ?? []
+
   const { data: categoryOptions = [] } = useQuery({
     queryKey: ['categories'],
     queryFn: getCategoryOptions,
@@ -529,16 +537,7 @@ export default function ReceiptNew() {
                   const isSearchOpen = focusedProductRow === index
                   const searchNorm = normalizeSearchText(productSearchQuery)
                   const filteredProducts = searchNorm
-                    ? products.filter(
-                        (p) => {
-                          const isNumeric = /^\d+$/.test(searchNorm)
-                          const nameMatch = normalizeSearchText(p.name).includes(searchNorm)
-                          if (isNumeric) {
-                            return nameMatch || String(p.id) === searchNorm || (p.barcode && (p.barcode === searchNorm || p.barcode.endsWith(searchNorm)))
-                          }
-                          return nameMatch || (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm)) || String(p.id).includes(searchNorm)
-                        }
-                      )
+                    ? searchResults
                     : products
                   return (
                   <tr key={index} className="border-b border-gray-100 dark:border-gray-700">
@@ -577,7 +576,9 @@ export default function ReceiptNew() {
                         />
                         {isSearchOpen && (
                           <ul className="absolute z-50 top-full start-0 end-0 mt-0.5 max-h-48 overflow-y-auto overflow-x-hidden rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
-                            {filteredProducts.length === 0 ? (
+                            {isSearchingProducts ? (
+                              <li className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">جاري البحث...</li>
+                            ) : filteredProducts.length === 0 ? (
                               <li className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">لا توجد نتائج</li>
                             ) : (
                               filteredProducts.map((p) => (
@@ -721,16 +722,7 @@ export default function ReceiptNew() {
                 const isSearchOpen = focusedProductRow === index
                 const searchNorm = normalizeSearchText(productSearchQuery)
                 const filteredProducts = searchNorm
-                  ? products.filter(
-                      (p) => {
-                        const isNumeric = /^\d+$/.test(searchNorm)
-                        const nameMatch = normalizeSearchText(p.name).includes(searchNorm)
-                        if (isNumeric) {
-                          return nameMatch || String(p.id) === searchNorm || (p.barcode && (p.barcode === searchNorm || p.barcode.endsWith(searchNorm)))
-                        }
-                        return nameMatch || (p.barcode && normalizeSearchText(p.barcode).includes(searchNorm)) || String(p.id).includes(searchNorm)
-                      }
-                    )
+                  ? searchResults
                   : products
                 const status = getBatchMatchStatus(row)
 
@@ -768,7 +760,9 @@ export default function ReceiptNew() {
                          />
                          {isSearchOpen && (
                            <ul className="absolute z-20 top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-xl ring-1 ring-black/5">
-                             {filteredProducts.length === 0 ? (
+                             {isSearchingProducts ? (
+                               <li className="px-3 py-2.5 text-sm text-gray-500">جاري البحث...</li>
+                             ) : filteredProducts.length === 0 ? (
                                <li className="px-3 py-2.5 text-sm text-gray-500">لا توجد نتائج</li>
                              ) : (
                                filteredProducts.map((p) => (

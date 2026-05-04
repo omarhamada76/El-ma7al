@@ -21,7 +21,7 @@ import { canManageProductBatches } from '@/lib/roles'
 const LAST_WAREHOUSE_KEY = 'vet-pharmacy-inventory-warehouse'
 
 /** Exactly one list filter at a time; `low_stock` may come from `?lowStock=1`. */
-type InventoryListFilter = 'all' | 'low_stock' | 'unpriced' | 'expiring'
+type InventoryListFilter = 'all' | 'low_stock' | 'unpriced' | 'expiring' | 'expired'
 
 function getLastWarehouseId(): string {
   if (typeof window === 'undefined') return ''
@@ -58,6 +58,7 @@ export default function Inventory() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [lowStockMode, setLowStockMode] = useState(() => searchParams.get('lowStock') === '1')
   const listFilter = useMemo((): InventoryListFilter => {
+    if (searchParams.get('expired') === '1') return 'expired'
     if (searchParams.get('expiring') === '1') return 'expiring'
     if (searchParams.get('unpriced') === '1') return 'unpriced'
     if (searchParams.get('lowStock') === '1' || lowStockMode) return 'low_stock'
@@ -100,12 +101,19 @@ export default function Inventory() {
           if (next === 'unpriced') {
             p.set('unpriced', '1')
             p.delete('expiring')
+            p.delete('expired')
           } else if (next === 'expiring') {
             p.set('expiring', '1')
             p.delete('unpriced')
+            p.delete('expired')
+          } else if (next === 'expired') {
+            p.set('expired', '1')
+            p.delete('unpriced')
+            p.delete('expiring')
           } else {
             p.delete('unpriced')
             p.delete('expiring')
+            p.delete('expired')
           }
           return p
         },
@@ -115,7 +123,11 @@ export default function Inventory() {
     [setSearchParams]
   )
   useEffect(() => {
-    if (searchParams.get('expiring') === '1' || searchParams.get('unpriced') === '1') {
+    if (
+      searchParams.get('expiring') === '1' ||
+      searchParams.get('unpriced') === '1' ||
+      searchParams.get('expired') === '1'
+    ) {
       setLowStockMode(false)
     }
     if (searchParams.get('lowStock') === '1') {
@@ -217,6 +229,7 @@ export default function Inventory() {
         low_stock: productIdsParam ? false : listFilter === 'low_stock',
         unpriced: productIdsParam ? false : listFilter === 'unpriced',
         expiring: productIdsParam ? false : listFilter === 'expiring',
+        expired: productIdsParam ? false : listFilter === 'expired',
         ids: productIdsParam || undefined,
       }),
     placeholderData: keepPreviousData,
@@ -337,6 +350,7 @@ export default function Inventory() {
                   if (listFilter === 'low_stock') title = 'تقرير نواقص المخزون'
                   else if (listFilter === 'unpriced') title = 'تقرير منتجات بدون سعر'
                   else if (listFilter === 'expiring') title = 'تقرير منتجات قاربت على الانتهاء'
+                  else if (listFilter === 'expired') title = 'تقرير منتجات منتهية الصلاحية'
 
                   const dateStr = new Date().toLocaleDateString('ar-EG', {
                     year: 'numeric',
@@ -513,6 +527,15 @@ export default function Inventory() {
             className="rounded border-gray-300 text-rose-600"
           />
           <span className="text-sm">قاربت على الانتهاء</span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={listFilter === 'expired'}
+            onChange={(e) => applyListFilter(e.target.checked ? 'expired' : 'all')}
+            className="rounded border-gray-300 text-rose-800"
+          />
+          <span className="text-sm">منتهي</span>
         </label>
       </div>
 

@@ -10,6 +10,8 @@ interface BatchPickerModalProps {
   productName: string
   batches: ProductBatch[]
   warehouseNames: Record<number, string>
+  productSellingPrice?: number
+  productPurchasePrice?: number
   /** Called when user confirms a batch selection. */
   onSelect: (batch: ProductBatch, quantity: number) => void
 }
@@ -20,6 +22,8 @@ export default function BatchPickerModal({
   productName,
   batches,
   warehouseNames,
+  productSellingPrice,
+  productPurchasePrice,
   onSelect,
 }: BatchPickerModalProps) {
   const sortedBatches = useMemo(() => {
@@ -109,6 +113,7 @@ export default function BatchPickerModal({
                 <th className="text-right py-2 px-3">المخزن</th>
                 <th className="text-right py-2 px-3">تاريخ الصلاحية</th>
                 <th className="text-right py-2 px-3">الكمية المتاحة</th>
+                <th className="text-right py-2 px-3">سعر الشراء</th>
                 <th className="text-right py-2 px-3">سعر البيع</th>
               </tr>
             </thead>
@@ -169,10 +174,25 @@ export default function BatchPickerModal({
                       )}
                     </td>
                     <td className="py-2 px-3 font-medium">{b.unit_type === "bulk" ? `${formatNumber(b.kg_remaining ?? 0, 2)} كجم` : formatNumber(b.quantity ?? 0, 0)}</td>
+                    <td className="py-2 px-3 text-xs text-gray-500">
+                      {b.purchase_price != null && b.purchase_price > 0 ? (
+                        formatCurrency(b.purchase_price)
+                      ) : productPurchasePrice != null ? (
+                        <span className="italic">{formatCurrency(productPurchasePrice)} (افتراضي)</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="py-2 px-3">
-                      {b.selling_price != null && b.selling_price > 0
-                        ? formatCurrency(b.selling_price)
-                        : <span className="text-gray-400">—</span>}
+                      {b.selling_price != null && b.selling_price > 0 ? (
+                        formatCurrency(b.selling_price)
+                      ) : productSellingPrice != null ? (
+                        <span className="text-amber-600 font-medium italic text-xs">
+                          {formatCurrency(productSellingPrice)} (افتراضي)
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                   </tr>
                 )

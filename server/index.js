@@ -734,7 +734,13 @@ const handlers = {
     const lowStock = query.low_stock === 'true' || query.low_stock === '1'
     const unpriced = query.unpriced === 'true' || query.unpriced === '1'
     const expiring = query.expiring === 'true' || query.expiring === '1'
+    const expired = query.expired === 'true' || query.expired === '1'
     const showArchived = query.show_archived === 'true' || query.show_archived === '1'
+    
+    console.log('[DEBUG] Products Filter Flags:', { 
+      lowStock, unpriced, expiring, expired, showArchived, 
+      warehouseId: warehouseIdOk, search: query.search 
+    })
     const list = await db.getProducts(
       query.search,
       query.category,
@@ -744,7 +750,8 @@ const handlers = {
       lowStock,
       unpriced,
       expiring,
-      showArchived
+      showArchived,
+      expired
     )
     const total = await db.getProductCountFiltered(
       query.search,
@@ -753,7 +760,8 @@ const handlers = {
       lowStock,
       unpriced,
       expiring,
-      showArchived
+      showArchived,
+      expired
     )
     send(res, 200, { data: list, total })
   },

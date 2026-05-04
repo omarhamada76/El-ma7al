@@ -347,6 +347,7 @@ function rowToProduct(r) {
   if (r.batch_total_quantity !== undefined) out.batch_total_quantity = r.batch_total_quantity
   if (r.bulk_bag_count !== undefined) out.bulk_bag_count = r.bulk_bag_count
   if (r.bulk_open_bag_low !== undefined) out.bulk_open_bag_low = !!r.bulk_open_bag_low
+  if (r.warehouse_stock !== undefined) out.warehouse_stock = r.warehouse_stock
   return out
 }
 
@@ -937,11 +938,32 @@ function sqlNearExpiryBatchExists(warehouseId = null) {
   `
 }
 
-export function getProductCountFiltered(search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false) {
+function sqlExpiredBatchExists(warehouseId = null) {
+  const wh =
+    warehouseId != null && Number.isInteger(warehouseId)
+      ? 'AND pb.warehouse_id = ?'
+      : ''
+  return `
+    EXISTS (
+      SELECT 1 FROM product_batches pb
+      WHERE pb.product_id = p.id
+        AND pb.expiry_date IS NOT NULL
+        AND pb.expiry_date != '9999-12-31'
+        AND date(pb.expiry_date) < date('now')
+        AND (
+          (COALESCE(pb.unit_type, 'piece') = 'bulk' AND COALESCE(pb.kg_remaining, 0) > 0)
+          OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND COALESCE(pb.quantity, 0) > 0)
+        )
+        ${wh}
+    )
+  `
+}
+
+export function getProductCountFiltered(search, category, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false, expired = false) {
   const d = getDb()
   const params = []
   let sql
-  const useAlias = lowStock || unpriced || expiring
+  const useAlias = lowStock || unpriced || expiring || expired
   if (lowStock) {
     if (warehouseId != null && Number.isInteger(warehouseId)) {
       sql = `
@@ -974,6 +996,14 @@ export function getProductCountFiltered(search, category, warehouseId = null, lo
       OR ${batchExists}
     )`
     if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
+  } else if (expired) {
+    const batchExists = sqlExpiredBatchExists(warehouseId)
+    sql = `SELECT COUNT(*) as n FROM products p WHERE (
+      (p.expiry_date IS NOT NULL
+        AND date(p.expiry_date) < date('now'))
+      OR ${batchExists}
+    )`
+    if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
   } else {
     sql = 'SELECT COUNT(*) as n FROM products WHERE 1=1'
   }
@@ -985,10 +1015,21 @@ export function getProductCountFiltered(search, category, warehouseId = null, lo
     sql += useAlias ? ' AND p.category = ?' : ' AND category = ?'
     params.push(category)
   }
+
+  // Handle archived products if column exists
+  if (!showArchived) {
+    try {
+      const cols = d.prepare('PRAGMA table_info(products)').all()
+      if (cols.some(c => c.name === 'is_active')) {
+        sql += useAlias ? ' AND p.is_active = 1' : ' AND is_active = 1'
+      }
+    } catch (_) {}
+  }
+
   return d.prepare(sql).get(...params)?.n ?? 0
 }
 
-export function getProducts(search, category, limit = 100, offset = 0, warehouseId = null, lowStock = false, unpriced = false, expiring = false) {
+export function getProducts(search, category, limit = 100, offset = 0, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false, expired = false) {
   const d = getDb()
   const params = []
   let sql
@@ -1011,6 +1052,7 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
       WHERE bi.status != 'empty'
       GROUP BY bi.product_id
     ) bgi ON bgi.product_id = p.id`
+  const useAlias = lowStock || unpriced || expiring || expired
   if (lowStock) {
     if (warehouseId != null && Number.isInteger(warehouseId)) {
       sql = `
@@ -1057,6 +1099,18 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
         OR ${batchExists}
       )`
     if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
+  } else if (expired) {
+    const batchExists = sqlExpiredBatchExists(warehouseId)
+    sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
+        bgi.bulk_bag_count, bgi.bulk_open_bag_low
+      FROM products p
+      ${batchAgg}
+      WHERE (
+        (p.expiry_date IS NOT NULL
+          AND date(p.expiry_date) < date('now'))
+        OR ${batchExists}
+      )`
+    if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
   } else {
     sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
         bgi.bulk_bag_count, bgi.bulk_open_bag_low
@@ -1072,6 +1126,17 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
     sql += ' AND p.category = ?'
     params.push(category)
   }
+
+  // Handle archived products if column exists
+  if (!showArchived) {
+    try {
+      const cols = d.prepare('PRAGMA table_info(products)').all()
+      if (cols.some(c => c.name === 'is_active')) {
+        sql += ' AND p.is_active = 1'
+      }
+    } catch (_) {}
+  }
+
   sql += ' ORDER BY p.id DESC LIMIT ? OFFSET ?'
   params.push(Math.min(limit, 500), Math.max(0, offset))
   return d.prepare(sql).all(...params).map(rowToProduct)

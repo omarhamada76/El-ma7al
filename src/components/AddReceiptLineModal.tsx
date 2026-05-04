@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import Modal from './Modal'
 import { cn, fromMonthInputValue, toMonthInputValue, normalizeSearchText } from '@/lib/utils'
 import { Package } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { getProducts } from '@/api/products'
 import type { Product } from '@/types/api'
 
 interface AddReceiptLineModalProps {
@@ -36,52 +38,17 @@ export default function AddReceiptLineModal({
     setExpiryDate(oneYear.toISOString().slice(0, 10))
   }, [open])
 
-  const filtered = useMemo(() => {
-    const q = normalizeSearchText(search)
-    if (!q) return products
-    const filteredList = products.filter(
-      (p) => {
-        const isNumeric = /^\d+$/.test(q)
-        const nameMatch = normalizeSearchText(p.name).includes(q)
-        
-        if (isNumeric) {
-          // Strict numeric matching for ID and Barcode
-          const idMatch = String(p.id) === q
-          const barcodeMatch = p.barcode && (p.barcode === q || p.barcode.endsWith(q))
-          return nameMatch || idMatch || barcodeMatch
-        }
-        
-        // General text matching
-        const barcodeMatch = p.barcode && normalizeSearchText(p.barcode).includes(q)
-        const idMatch = String(p.id).includes(q)
-        return nameMatch || barcodeMatch || idMatch
-      }
-    )
+  const { data: searchResultsData, isLoading: isSearching } = useQuery({
+    queryKey: ['products', 'search', search],
+    queryFn: () => getProducts({ search: normalizeSearchText(search), limit: 50 }),
+    enabled: search.trim().length > 0,
+    staleTime: 30000,
+  })
+  const searchResults = searchResultsData?.data ?? []
 
-    return filteredList.sort((a, b) => {
-      const aBar = normalizeSearchText(a.barcode || '')
-      const bBar = normalizeSearchText(b.barcode || '')
-      if (aBar === q && bBar !== q) return -1
-      if (bBar === q && aBar !== q) return 1
+  const filtered = search.trim().length > 0 ? searchResults : products
 
-      const aName = normalizeSearchText(a.name)
-      const bName = normalizeSearchText(b.name)
-      if (aName === q && bName !== q) return -1
-      if (bName === q && aName !== q) return 1
-
-      const aId = String(a.id)
-      const bId = String(b.id)
-      const qNum = parseInt(q, 10)
-      const aMatchesId = aId === q || (!isNaN(qNum) && a.id === qNum)
-      const bMatchesId = bId === q || (!isNaN(qNum) && b.id === qNum)
-      if (aMatchesId && !bMatchesId) return -1
-      if (bMatchesId && !aMatchesId) return 1
-
-      return a.name.localeCompare(b.name, 'ar')
-    })
-  }, [products, search])
-
-  const selected = selectedId != null ? products.find((p) => p.id === selectedId) : undefined
+  const selected = selectedId != null ? filtered.find((p) => p.id === selectedId) : undefined
 
   const handleAdd = () => {
     if (!selected || !expiryDate) return
@@ -180,10 +147,8 @@ export default function AddReceiptLineModal({
         <div>
           <label className="block text-sm font-medium mb-1">المنتجات</label>
           <div className="rounded-lg border border-gray-200 dark:border-gray-600 max-h-56 overflow-y-auto">
-            {products.length === 0 ? (
-              <p className="p-4 text-sm text-gray-500 dark:text-gray-400 text-center">
-                لا توجد منتجات. استخدم «إضافة منتج جديد» أولاً.
-              </p>
+            {isSearching ? (
+              <p className="p-4 text-sm text-gray-500 dark:text-gray-400 text-center italic animate-pulse">جاري البحث...</p>
             ) : filtered.length === 0 ? (
               <p className="p-4 text-sm text-gray-500 dark:text-gray-400 text-center">لا توجد نتائج</p>
             ) : (

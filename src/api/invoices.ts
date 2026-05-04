@@ -17,7 +17,7 @@ export interface InvoicesParams {
 }
 
 export interface CreateInvoiceBody {
-  client_id: number
+  client_id?: number
   barn_id?: number
   warehouse_id: number
   customer_name: string
