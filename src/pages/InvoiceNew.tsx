@@ -540,8 +540,10 @@ export default function InvoiceNew() {
   useEffect(() => {
     if (payment_method === 'credit') {
       setPaidAmount(0)
+    } else if (payment_method === 'cash' && paid_amount === 0) {
+      setPaidAmount(Math.round(finalTotal))
     }
-  }, [payment_method])
+  }, [payment_method, finalTotal])
 
   useEffect(() => {
     if (remainingUnpaid <= 0) {
@@ -1253,7 +1255,13 @@ export default function InvoiceNew() {
       return
     }
     const client = clients.find((c) => String(c.id) === clientId)
-    if (!client && (payment_method !== 'cash' || clientId)) {
+    if (!client && !clientId) {
+      // "Cash Customer" — MUST be fully paid
+      if (remainingUnpaid > 0.01) {
+        setError('الفواتير النقدية (بدون عميل) يجب أن تكون مدفوعة بالكامل')
+        return
+      }
+    } else if (!client && clientId) {
       setError('اختر عميلاً من القائمة أو أضف عميلاً جديداً')
       return
     }
