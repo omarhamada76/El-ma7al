@@ -447,8 +447,8 @@ export default function ProductDetail() {
             لا توجد دُفعات. عند استلام بضاعة بتاريخ صلاحية يتم إنشاء دُفعة تلقائياً.
           </p>
         ) : (
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-x-auto">
+            <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
                   <th className="text-right py-2 px-3">المخزن</th>

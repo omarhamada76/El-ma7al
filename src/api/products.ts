@@ -11,6 +11,7 @@ export interface ProductsParams {
   unpriced?: boolean
   expiring?: boolean
   expired?: boolean
+  out_of_stock?: boolean
   ids?: string
   show_archived?: boolean
 }

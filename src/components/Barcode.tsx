@@ -14,8 +14,13 @@ export interface BarcodeProps {
   text?: string
   /** Quiet zone margin in px */
   margin?: number
+  marginTop?: number
+  marginBottom?: number
+  marginLeft?: number
+  marginRight?: number
   className?: string
   style?: React.CSSProperties
+  format?: 'CODE128' | 'CODE39'
 }
 
 export default function Barcode({
@@ -26,8 +31,13 @@ export default function Barcode({
   displayValue = true,
   text,
   margin = 10,
+  marginTop,
+  marginBottom,
+  marginLeft,
+  marginRight,
   className,
   style,
+  format = 'CODE128',
 }: BarcodeProps) {
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -37,26 +47,37 @@ export default function Barcode({
     try {
       while (el.firstChild) el.removeChild(el.firstChild)
       JsBarcode(el, value, {
-        format: 'CODE128',
+        format,
         width,
         height,
         displayValue,
         text,
         fontSize,
         margin,
+        marginTop,
+        marginBottom,
+        marginLeft,
+        marginRight,
         background: '#ffffff',
         lineColor: '#000000',
+        valid: (valid: boolean) => {
+          if (!valid) console.warn('Invalid barcode value:', value)
+        },
       })
     } catch {
-      // Invalid value for Code128 — leave SVG empty
+      // Invalid value — leave SVG empty
     }
-  }, [value, width, height, fontSize, displayValue])
+  }, [value, width, height, fontSize, displayValue, format, margin, marginTop, marginBottom, marginLeft, marginRight])
 
   return (
     <svg
       ref={svgRef}
       className={className}
-      style={style}
+      style={{
+        ...style,
+        shapeRendering: 'crispEdges',
+        display: 'block',
+      }}
       role="img"
       aria-label={`Barcode ${value}`}
     />

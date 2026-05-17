@@ -115,14 +115,14 @@ export default function ClientAccountStatement() {
     if (barns.length === 0 || barnScope === 'all') {
       return `كشف حساب — ${client.name}`
     }
-    const b = barns.find((x) => x.id === barnScope)
+    const b = barns.find((x) => String(x.id) === String(barnScope))
     return `كشف حساب — ${client.name} — ${b?.name ?? ''}`
   }, [client, barns, barnScope])
 
   const pdfFileLabel = useMemo(() => {
     if (!client) return 'عميل'
     if (barns.length === 0 || barnScope === 'all') return client.name
-    const b = barns.find((x) => x.id === barnScope)
+    const b = barns.find((x) => String(x.id) === String(barnScope))
     return b ? `${client.name}-${b.name}` : client.name
   }, [client, barns, barnScope])
 

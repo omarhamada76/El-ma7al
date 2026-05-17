@@ -39,12 +39,14 @@ function extractLongestBatchOrBagToken(t: string): ParsedScan | null {
 
 /** Batch label / invoice scan: `B7` → batch id 7 */
 export function getBatchBarcodeValue(batchId: number): string {
-  return `B${batchId}`
+  // Use fixed 8-digit numeric token for maximum compatibility with scanners
+  // that are configured for Code128 numeric payloads and length filters.
+  return String(batchId).padStart(8, '0')
 }
 
 /** Bulk bag label scan: `G15` → bag_instances.id 15 */
 export function getBagBarcodeValue(bagInstanceId: number): string {
-  return `G${bagInstanceId}`
+  return `G${String(bagInstanceId).padStart(7, '0')}`
 }
 
 /** True if string is YYYY-MM-DD and within `days` days from today (inclusive of today as day 0). */

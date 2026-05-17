@@ -149,7 +149,10 @@ export default function KpiInsightDrawer({
     switch (kpiKey) {
       case 'total_sales':
       case 'total_profit':
-        return { to: invoicesListHref({ from: periodFrom, to: periodTo }), label: 'عرض فواتير الفترة' }
+        return { 
+          to: invoicesListHref({ from: periodFrom, to: periodTo }), 
+          label: hasPeriod ? 'عرض فواتير الفترة' : 'عرض جميع الفواتير' 
+        }
       case 'client_debt':
         return { to: clientsListHref(true), label: 'عرض العملاء حسب المديونية' }
       case 'safe_balance':
@@ -196,14 +199,16 @@ export default function KpiInsightDrawer({
             <h2 id="kpi-drawer-title" className="text-lg font-bold text-gray-900 dark:text-gray-100">
               {title}
             </h2>
-            {(kpiKey === 'total_sales' || kpiKey === 'total_profit') && hasPeriod && (
+            {(kpiKey === 'total_sales' || kpiKey === 'total_profit') && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                المبيعات والأرباح أعلاه للفترة {periodFrom} — {periodTo}
+                {hasPeriod 
+                  ? `المبيعات والأرباح أعلاه للفترة ${periodFrom} — ${periodTo}`
+                  : 'المبيعات والأرباح أعلاه هي إجمالي ما تم تسجيله في النظام (عرض الكل)'}
               </p>
             )}
             {kpiKey !== 'total_sales' && kpiKey !== 'total_profit' && (
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                هذا المؤشر يعكس وضعاً حالياً أو تراكمياً في النظام (ليس مرتبطاً بفترة التقرير فقط).
+                هذا المؤشر يعكس وضعاً حالياً أو تراكمياً في النظام.
               </p>
             )}
           </div>

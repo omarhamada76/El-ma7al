@@ -83,7 +83,7 @@ export default function ReturnNew() {
     queryKey: ['invoices', 'returns', clientId, barnId, invoiceSearch],
     queryFn: () => {
       const params: any = { 
-        client_id: Number(clientId), 
+        client_id: clientId ? Number(clientId) : undefined, 
         barn_id: barnId ? Number(barnId) : undefined,
         limit: 100
       }
@@ -92,7 +92,7 @@ export default function ReturnNew() {
       }
       return getInvoices(params)
     },
-    enabled: !!clientId,
+    enabled: !!clientId || (!!invoiceSearch && /^\d+$/.test(invoiceSearch.trim())),
   })
   
   // Extract all items from all invoices for easier display
@@ -373,15 +373,25 @@ export default function ReturnNew() {
         <div className="md:col-span-2">
           {error && <FeedbackBanner type="error" message={error} className="mb-6" />}
 
-          {!clientId ? (
+          {!clientId && !invoiceSearch ? (
             <div className="bg-white dark:bg-gray-800 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700 p-12 text-center">
               <div className="w-16 h-16 bg-gray-50 dark:bg-gray-900 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Search className="w-8 h-8 text-gray-300" />
               </div>
-              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">بانتظار تحديد العميل</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-xs mx-auto">
-                يرجى اختيار العميل من القائمة الجانبية لعرض فواتيره السابقة.
+              <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">بانتظار تحديد العميل أو الفاتورة</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-xs mx-auto mb-6">
+                يرجى اختيار العميل من القائمة الجانبية، أو البحث مباشرة برقم الفاتورة أدناه.
               </p>
+              <div className="max-w-xs mx-auto relative">
+                <input
+                  type="text"
+                  value={invoiceSearch}
+                  onChange={(e) => setInvoiceSearch(e.target.value)}
+                  placeholder="أدخل رقم الفاتورة..."
+                  className="w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 py-3 ps-10 pe-4 text-sm focus:ring-2 focus:ring-primary-500 transition-all font-bold"
+                />
+                <Search className="absolute start-3 top-3.5 w-4 h-4 text-gray-400" />
+              </div>
             </div>
           ) : loadingInvoices ? (
             <div className="space-y-4 animate-pulse">

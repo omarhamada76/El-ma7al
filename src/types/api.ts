@@ -99,6 +99,8 @@ export interface Product {
   bulk_open_bag_low?: boolean
   /** From list query when warehouse_id filter is active */
   warehouse_stock?: number | null
+  /** Nearest expiry date among active batches */
+  nearest_expiry?: string | null
 }
 
 export interface ProductWarehouseStock {
@@ -269,7 +271,7 @@ export interface Payment {
 
 export interface SafeTransaction {
   id: number
-  type: 'initial' | 'customer_payment_in' | 'supplier_payment_out' | 'adjustment_in' | 'adjustment_out'
+  type: 'initial' | 'customer_payment_in' | 'invoice_payment_in' | 'supplier_payment_out' | 'adjustment_in' | 'adjustment_out'
   amount: number
   reference_type: string | null
   reference_id: number | null

@@ -16,6 +16,7 @@ const typeLabels: Record<string, string> = {
   supplier_payment_out: 'سداد لمورد (خارج)',
   adjustment_in: 'تعديل إيداع',
   adjustment_out: 'تعديل سحب',
+  invoice_payment_in: 'تحصيل فاتورة (داخل)',
 }
 
 export default function Safe() {
@@ -232,7 +233,8 @@ export default function Safe() {
                 const isIn =
                   tx.type === 'initial' ||
                   tx.type === 'customer_payment_in' ||
-                  tx.type === 'adjustment_in'
+                  tx.type === 'adjustment_in' ||
+                  tx.type === 'invoice_payment_in'
                 const canDelete = !tx.reference_type // لا نحذف الحركات المرتبطة بالسداد
                 return (
                   <li

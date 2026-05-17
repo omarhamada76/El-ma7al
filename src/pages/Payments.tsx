@@ -64,12 +64,16 @@ export default function Payments() {
                   >
                     <td className="py-2 px-4">{formatDate(p.payment_date)}</td>
                     <td className="py-2 px-4">
-                      <Link
-                        to={`/clients/${p.client_id}`}
-                        className="text-primary-600 dark:text-primary-400 hover:underline"
-                      >
-                        {p.client_name ?? `#${p.client_id}`}
-                      </Link>
+                      {p.client_id ? (
+                        <Link
+                          to={`/clients/${p.client_id}`}
+                          className="text-primary-600 dark:text-primary-400 hover:underline"
+                        >
+                          {p.client_name ?? `#${p.client_id}`}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="py-2 px-4">
                       {p.barn_id != null ? (
@@ -80,7 +84,7 @@ export default function Payments() {
                           {p.barn_name ?? `#${p.barn_id}`}
                         </Link>
                       ) : (
-                        '—'
+                        <span className="text-gray-400">—</span>
                       )}
                     </td>
                     <td className="py-2 px-4 font-medium">

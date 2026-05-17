@@ -109,7 +109,11 @@ export default function BarnAccountStatement() {
     staleTime: 0,
   })
 
-  const titleName = barn?.name ?? `عنبر #${id}`
+  const titleName = useMemo(() => {
+    if (!barn) return `عنبر #${id}`
+    if (!barnClient) return barn.name
+    return `${barnClient.name} — ${barn.name}`
+  }, [barn, barnClient, id])
   const period = pdfPeriod(statement, from, to)
 
   async function handleDownloadPdf() {
@@ -158,7 +162,7 @@ export default function BarnAccountStatement() {
       <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <h1 className="text-xl sm:text-2xl font-bold break-words">
-            كشف حساب العنبر {barn?.name ? `— ${barn.name}` : ''}
+            كشف حساب — {titleName}
           </h1>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-2xl">{desc}</p>
           {id && (

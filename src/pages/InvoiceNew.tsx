@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams, useMatch, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X } from 'lucide-react'
+import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X, CheckCircle2, Users, Wallet, Zap, Banknote, CreditCard } from 'lucide-react'
 import { playScanFeedback } from '@/lib/scanFeedback'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import type { Client } from '@/types/api'
@@ -236,18 +236,29 @@ export default function InvoiceNew() {
     data: productsWithStock = [],
     isFetching: productsLoading,
     isFetched: productsQueryFetched,
+    error: productsError,
   } = useQuery({
     queryKey: ['products', 'warehouse', warehouseId],
-    queryFn: () => getProductsWithStockInWarehouse(Number(warehouseId)),
+    queryFn: () => {
+      console.log('Fetching products for warehouse:', warehouseId)
+      return getProductsWithStockInWarehouse(Number(warehouseId))
+    },
     enabled: !!warehouseId,
+    staleTime: 30_000,
   })
+
+  useEffect(() => {
+    if (productsWithStock.length > 0) {
+      console.log(`Loaded ${productsWithStock.length} products with stock`)
+    }
+  }, [productsWithStock.length])
 
   const { data: topSellingRows = [] } = useQuery({
     queryKey: ['reports', 'top-products', 'invoice-picker', warehouseId],
     queryFn: async () => {
       try {
         return await getTopProducts({
-          limit: 500,
+          limit: 10,
           warehouse_id: Number(warehouseId),
         })
       } catch {
@@ -262,6 +273,7 @@ export default function InvoiceNew() {
     queryKey: ['warehouse-batches', warehouseId],
     queryFn: () => getWarehouseBatches(Number(warehouseId)),
     enabled: !!warehouseId,
+    staleTime: 30_000,
   })
 
   const batchesByProduct = useMemo(() => {
@@ -554,9 +566,10 @@ export default function InvoiceNew() {
     }
   }, [remainingUnpaid, effectivePaidAmount])
 
-  const filteredWarehouseProducts = productSearch.trim()
+  const deferredProductSearch = useDeferredValue(productSearch)
+  const filteredWarehouseProducts = deferredProductSearch.trim()
     ? productsWithStock.filter(({ product }) => {
-      const q = normalizeSearchText(productSearch)
+      const q = normalizeSearchText(deferredProductSearch)
       const isNumeric = /^\d+$/.test(q)
       const nameMatch = normalizeSearchText(product.name).includes(q)
 
@@ -581,8 +594,8 @@ export default function InvoiceNew() {
       }
     }
     const list = [...filteredWarehouseProducts]
-    list.sort((a, b) => {
-      const q = normalizeSearchText(productSearch)
+    const sorted = list.sort((a, b) => {
+      const q = normalizeSearchText(deferredProductSearch)
       if (q) {
         const aBar = normalizeSearchText(a.product.barcode || '')
         const bBar = normalizeSearchText(b.product.barcode || '')
@@ -606,8 +619,10 @@ export default function InvoiceNew() {
       if (inTopA !== inTopB) return inTopA ? -1 : 1
       return a.product.name.localeCompare(b.product.name, 'ar')
     })
-    return list
-  }, [filteredWarehouseProducts, topSellingRows])
+
+    // Limit to 10 for initial view, or 50 for search results to keep UI snappy
+    return deferredProductSearch.trim() ? sorted.slice(0, 50) : sorted.slice(0, 10)
+  }, [filteredWarehouseProducts, topSellingRows, deferredProductSearch])
 
   const formatExpiry = (d: string) => formatExpiryMonth(d)
 
@@ -777,7 +792,9 @@ export default function InvoiceNew() {
       const next = [...prev]
       const row = next[index]
       // If batch-bound, cap at batch stock; otherwise cap at warehouse stock
-      const maxQty = row.batch_stock != null ? row.batch_stock : (row.stock > 0 ? row.stock : 99999)
+      // Allow increasing quantity up to the total warehouse stock (row.stock), even if row.batch_id is set.
+      // This supports the "batch overflow" logic on the backend.
+      const maxQty = row.stock > 0 ? row.stock : 99999
       const q = Math.max(0, Math.min(qty, maxQty))
       next[index] = { ...row, quantity: q, total_price: q * row.unit_price }
       return next
@@ -1323,7 +1340,7 @@ export default function InvoiceNew() {
           client_id: clientId ? Number(clientId) : undefined,
           barn_id: barnId ? Number(barnId) : undefined,
           customer_name: client?.name || 'عميل نقدي',
-          payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
+          payment_method: (!clientId || payment_method === 'cash') ? 'cash' : 'آجل',
           paid_amount: Math.round(effectivePaidAmount),
           register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
           immediate_payment_method: effectivePaidAmount > 0 ? immediateMethod : undefined,
@@ -1349,7 +1366,7 @@ export default function InvoiceNew() {
       barn_id: barnId ? Number(barnId) : undefined,
       warehouse_id: Number(warehouseId),
       customer_name: client?.name || 'عميل نقدي',
-      payment_method: payment_method === 'cash' ? 'cash' : 'آجل',
+      payment_method: (!clientId || payment_method === 'cash') ? 'cash' : 'آجل',
       paid_amount: Math.round(effectivePaidAmount),
       register_deferred: remainingUnpaid > 0 ? effectiveRegisterDeferred : false,
       immediate_payment_method: effectivePaidAmount > 0 ? immediateMethod : undefined,
@@ -1373,6 +1390,16 @@ export default function InvoiceNew() {
     setClientSearch('')
     setClientListOpen(true)
     setTimeout(() => clientSearchInputRef.current?.focus(), 0)
+  }
+
+  const handleQuickCash = () => {
+    setClientId('')
+    setBarnId('')
+    setClientSearch('')
+    setPaymentMethod('cash')
+    setPaidAmount(0)
+    setRegisterDeferred(false)
+    barcodeInputRef.current?.focus()
   }
 
   const selectedClient = clients.find((c) => String(c.id) === clientId)
@@ -1459,14 +1486,28 @@ export default function InvoiceNew() {
             }}
           />
 
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
-            <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              ١. بيانات الفاتورة
-            </h2>
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 sm:p-4 space-y-3 shadow-sm transition-all duration-200">
+            <div className="flex items-center justify-between gap-4 border-b border-gray-100 dark:border-gray-700/50 pb-2.5 mb-1.5">
+              <h2 className="flex items-center gap-2 text-[11px] font-black text-gray-700 dark:text-gray-300 uppercase tracking-widest">
+                <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 text-[10px]">١</div>
+                <Users className="w-3.5 h-3.5" />
+                <span>العميل والمخزن</span>
+              </h2>
+              {!isEdit && (
+                <button
+                  type="button"
+                  onClick={handleQuickCash}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 text-[10px] font-black hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors border border-green-200 dark:border-green-800 uppercase tracking-tighter"
+                >
+                  <Zap className="w-3 h-3 fill-current" />
+                  <span>نقدي سريع</span>
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <label className="block text-sm font-medium">
+                  <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                     العميل {payment_method === 'cash' ? '(اختياري)' : '*'}
                   </label>
                   {!isEdit && (
@@ -1528,8 +1569,8 @@ export default function InvoiceNew() {
                             placeholder="ابحث بالاسم أو رقم الهاتف..."
                             autoComplete="off"
                             className={cn(
-                              'w-full py-2 ps-11 pe-3 rounded-lg border bg-white dark:bg-gray-800',
-                              'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 text-sm'
+                              'w-full py-1.5 ps-9 pe-3 rounded-lg border bg-white dark:bg-gray-900',
+                              'border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 text-sm outline-none'
                             )}
                           />
                         </div>
@@ -1580,7 +1621,7 @@ export default function InvoiceNew() {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">
+                <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
                   العنبر{barns.length > 0 ? ' *' : ''}
                 </label>
                 <select
@@ -1589,8 +1630,8 @@ export default function InvoiceNew() {
                   disabled={!clientId || isEdit}
                   required={barns.length > 0}
                   className={cn(
-                    'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                    'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500',
+                    'w-full px-3 py-1.5 text-sm rounded-lg border bg-white dark:bg-gray-900',
+                    'border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 outline-none',
                     (!clientId || isEdit) && 'opacity-60 cursor-not-allowed'
                   )}
                 >
@@ -1601,7 +1642,7 @@ export default function InvoiceNew() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">المخزن *</label>
+                <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">المخزن *</label>
                 <select
                   ref={warehouseSelectRef}
                   value={warehouseId}
@@ -1616,8 +1657,8 @@ export default function InvoiceNew() {
                   }}
                   disabled={isEdit}
                   className={cn(
-                    'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                    'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500',
+                    'w-full px-3 py-1.5 text-sm rounded-lg border bg-white dark:bg-gray-900',
+                    'border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 outline-none',
                     isEdit && 'opacity-60 cursor-not-allowed'
                   )}
                   required
@@ -1637,56 +1678,215 @@ export default function InvoiceNew() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-3">
-            <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              ٢. الأصناف
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 sm:p-4 space-y-3 shadow-sm transition-all duration-200">
+            <h2 className="flex items-center gap-2 text-[11px] font-black text-gray-700 dark:text-gray-300 uppercase tracking-widest border-b border-gray-100 dark:border-gray-700/50 pb-2.5 mb-1.5">
+              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 text-[10px]">٢</div>
+              <Wallet className="w-3.5 h-3.5" />
+              <span>الدفع والملاحظات</span>
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
+              <div className="lg:col-span-4 space-y-1.5">
+                <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider">طريقة الدفع</label>
+                <div className="flex p-1 bg-gray-100 dark:bg-gray-800/50 rounded-xl w-full border border-gray-200 dark:border-gray-700">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('cash')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg transition-all font-bold text-xs',
+                      payment_method === 'cash'
+                        ? 'bg-white dark:bg-gray-700 text-green-600 dark:text-green-400 shadow-sm ring-1 ring-black/5'
+                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                    )}
+                  >
+                    <Banknote className="w-3.5 h-3.5" />
+                    <span>كاش</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('credit')}
+                    className={cn(
+                      'flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-lg transition-all font-bold text-xs',
+                      payment_method === 'credit'
+                        ? 'bg-white dark:bg-gray-700 text-amber-600 dark:text-amber-400 shadow-sm ring-1 ring-black/5'
+                        : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                    )}
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>آجل</span>
+                  </button>
+                </div>
+              </div>
+
+              {payment_method === 'cash' && (
+                <div className="lg:col-span-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider">المدفوع (ج.م)</label>
+                    <button
+                      type="button"
+                      onClick={() => setPaidAmount(Math.round(finalTotal))}
+                      className="text-[10px] font-bold text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      دفع كامل المبلغ
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    value={paid_amount || ''}
+                    onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
+                    className={cn(
+                      'w-full px-3 py-1.5 text-sm rounded-lg border bg-white dark:bg-gray-900',
+                      'border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 outline-none'
+                    )}
+                    placeholder="0"
+                  />
+                </div>
+              )}
+
+              <div className={cn('space-y-1.5', payment_method === 'cash' ? 'lg:col-span-5' : 'lg:col-span-8')}>
+                <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider">ملاحظات</label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="ملاحظات إضافية على الفاتورة..."
+                  className={cn(
+                    'w-full px-3 py-1.5 text-sm rounded-lg border bg-white dark:bg-gray-900',
+                    'border-gray-300 dark:border-gray-700 focus:ring-2 focus:ring-primary-500 outline-none resize-none'
+                  )}
+                  rows={1}
+                />
+              </div>
+            </div>
+
+            {payment_method === 'cash' && paid_amount > 0 && (
+              <div className="pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                  <div className="flex-1 space-y-1.5">
+                    <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-wider">طريقة السداد الفوري</label>
+                    <div className="flex gap-2">
+                      {(['cash', 'vodafone_cash', 'instapay'] as const).map((method) => (
+                        <button
+                          key={method}
+                          type="button"
+                          onClick={() => setImmediateMethod(method)}
+                          className={cn(
+                            'flex-1 py-1.5 px-3 rounded-lg border text-xs font-bold transition-all',
+                            immediateMethod === method
+                              ? 'bg-primary-50 border-primary-500 text-primary-700 dark:bg-primary-900/20 dark:text-primary-400'
+                              : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300'
+                          )}
+                        >
+                          {method === 'cash' ? 'نقدي' : method === 'vodafone_cash' ? 'فودافون كاش' : 'انستاباي'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {items.length > 0 && (
+              <div className="rounded-xl border border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/20 p-3 space-y-3">
+                <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
+                  {payment_method === 'credit' ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-gray-400 uppercase">المبلغ الآجل:</span>
+                      <span className="text-sm font-bold text-amber-600 dark:text-amber-400">{formatCurrency(finalTotal)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-gray-400 uppercase">المتبقي:</span>
+                        <span className={cn('text-sm font-bold', remainingUnpaid > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600')}>
+                          {formatCurrency(remainingUnpaid)}
+                        </span>
+                      </div>
+                      {remainingUnpaid > 0 && (
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                          <input
+                            type="checkbox"
+                            checked={registerDeferred}
+                            onChange={(e) => setRegisterDeferred(e.target.checked)}
+                            className="w-3.5 h-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          <span className="text-xs font-bold text-gray-600 dark:text-gray-400 group-hover:text-primary-600 transition-colors">تسجيل كآجل</span>
+                        </label>
+                      )}
+                    </>
+                  )}
+                  <div className="flex items-center gap-3 border-r border-gray-200 dark:border-gray-700 pr-6">
+                    <label className="text-[10px] font-black text-gray-400 uppercase whitespace-nowrap">تاريخ الاستحقاق:</label>
+                    <input
+                      type="date"
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-gray-700 dark:text-gray-300 focus:outline-none focus:text-primary-600"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3 sm:p-4 space-y-3 shadow-sm transition-all duration-200">
+            <h2 className="flex items-center gap-2 text-[11px] font-black text-gray-700 dark:text-gray-300 uppercase tracking-widest border-b border-gray-100 dark:border-gray-700/50 pb-2.5 mb-1.5">
+              <div className="flex h-5 w-5 items-center justify-center rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 text-[10px]">٣</div>
+              <Package className="w-3.5 h-3.5" />
+              <span>الأصناف</span>
             </h2>
 
-            <div className="mb-3">
-              <label className="block text-sm font-medium mb-1">
-                مسح البيع: B أو G من ملصقك الداخلي، أو باركود المورد لفتح اختيار الدفعة
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-1.5 text-gray-600 dark:text-gray-400">
+                امسح كود المنتج أو اكتب رقم الدفعة (B/G)
               </label>
-              <input
-                ref={barcodeInputRef}
-                type="text"
-                data-scanner-input="true"
-                lang="en"
-                dir="ltr"
-                inputMode="text"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    void handleBarcodeSubmit()
-                  }
-                }}
-                placeholder="B7 / G15 / supplier barcode..."
-                className={cn(
-                  'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800 text-left font-mono',
-                  'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-                )}
-              />
-              <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-1 flex items-center gap-1">
-                <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-[10px] font-mono border border-gray-200 dark:border-gray-600">Enter ↵</kbd>
-                <span>بعد المسح أو الكتابة للإضافة</span>
-              </p>
+              <div className="relative group">
+                <Search className="absolute end-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 group-focus-within:text-primary-500 transition-colors" />
+                <input
+                  ref={barcodeInputRef}
+                  type="text"
+                  data-scanner-input="true"
+                  lang="en"
+                  dir="ltr"
+                  inputMode="text"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      void handleBarcodeSubmit()
+                    }
+                  }}
+                  placeholder="B7 / G15 / supplier barcode..."
+                  className={cn(
+                    'w-full py-3 ps-4 sm:ps-16 pe-10 rounded-xl border-2 bg-gray-50 dark:bg-gray-900/50 text-left font-mono text-lg transition-all',
+                    'border-gray-200 dark:border-gray-800 focus:bg-white dark:focus:bg-gray-900 focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 outline-none'
+                  )}
+                />
+                <div className="absolute start-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                   <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-[10px] font-mono border border-gray-200 dark:border-gray-600">Enter ↵</kbd>
+                </div>
+              </div>
               {scanError && (
-                <p className="text-sm text-amber-600 dark:text-amber-400 mt-1">{scanError}</p>
+                <p className="text-sm text-red-600 dark:text-red-400 mt-2 font-medium flex items-center gap-1">
+                   <X className="w-4 h-4" />
+                   {scanError}
+                </p>
               )}
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] gap-6 min-w-0">
               {showProductList && (
                 <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 min-w-0 max-w-full">
-                  <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase">
-                    منتجات المخزن
-                  </h3>
+                  <div className="flex items-center justify-between gap-4 border-b border-gray-100 dark:border-gray-700/50 pb-2 mb-3">
+                    <h3 className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">
+                      منتجات المخزن
+                    </h3>
+                  </div>
                   <div className="relative mb-3">
                     <Search className="pointer-events-none absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                     <input
@@ -1700,7 +1900,7 @@ export default function InvoiceNew() {
                       )}
                     />
                   </div>
-                  <ul className="max-h-48 overflow-y-auto space-y-1 text-sm">
+                  <ul className="max-h-72 overflow-y-auto space-y-2 text-sm pr-1">
                     {warehouseProductsSortedForPicker.map(({ product, stock }) => {
                       const inInvoice = items.some((i) => i.product_id === product.id)
                       const pBatches = batchesByProduct.get(product.id)
@@ -1708,39 +1908,48 @@ export default function InvoiceNew() {
                       return (
                         <li
                           key={product.id}
-                          className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg hover:bg-white dark:hover:bg-gray-700/50"
+                          className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 hover:border-primary-300 dark:hover:border-primary-700 transition-all shadow-sm"
                         >
-                          <div className="min-w-0 flex-1 flex items-center gap-2" title={product.name}>
-                            <span className="truncate">{product.name}</span>
-                            <span className="text-xs text-gray-400 font-mono shrink-0">#{product.id}</span>
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="font-bold text-gray-900 dark:text-gray-100 truncate">{product.name}</p>
+                              <p className="text-[10px] text-gray-500 font-mono">#{product.id}</p>
+                              {nearest && nearest.expiry_date !== '9999-12-31' && (
+                                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                                  تنتهي: {formatExpiryMonth(nearest.expiry_date)}
+                                </p>
+                              )}
+                            </div>
+                            <div className="text-left shrink-0">
+                              <p className={cn(
+                                "text-xs font-bold",
+                                stock === 0 ? "text-red-500" : "text-primary-600 dark:text-primary-400"
+                              )}>
+                                {product.unit_type === 'bulk' ? `${formatNumber(stock, 2)} كجم` : formatNumber(stock, 0)}
+                              </p>
+                              <p className="text-[10px] text-gray-400">مخزون</p>
+                            </div>
                           </div>
-                          <span
-                            className={cn(
-                              'shrink-0 flex items-center gap-2',
-                              stock === 0 ? 'text-gray-400 dark:text-gray-500' : 'text-gray-500 dark:text-gray-400'
-                            )}
-                          >
-                            متوفر: {product.unit_type === 'bulk' ? `${formatNumber(stock, 2)} كجم` : formatNumber(stock, 0)}
-                            {nearest && nearest.expiry_date !== '9999-12-31' && (
-                              <span className="text-xs text-amber-600 dark:text-amber-400">
-                                صلاحية: {formatExpiryMonth(nearest.expiry_date)}
-                              </span>
-                            )}
-                          </span>
                           <button
                             type="button"
                             onClick={() => addProductToInvoice({ product, stock })}
-                            className="shrink-0 px-2 py-1 rounded bg-primary-600 text-white hover:bg-primary-700 text-xs font-medium"
+                            className={cn(
+                              "w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors",
+                              inInvoice 
+                                ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800 hover:bg-primary-100 dark:hover:bg-primary-900/40"
+                                : "bg-primary-600 text-white hover:bg-primary-700 shadow-sm shadow-primary-200 dark:shadow-none"
+                            )}
                           >
-                            {inInvoice ? 'أضف واحداً' : 'أضف'}
+                            <Plus className="w-3.5 h-3.5" />
+                            {inInvoice ? 'أضف المزيد' : 'إضافة للفاتورة'}
                           </button>
                         </li>
                       )
                     })}
                   </ul>
                   {!productSearch.trim() && topSellingRows.length > 0 && (
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      مرتبة حسب الأكثر مبيعاً من هذا المخزن — استخدم البحث للعثور على منتج معيّن
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2 font-medium">
+                      يتم عرض أفضل ١٠ منتجات مبيعاً لتسريع التحميل — استخدم البحث للوصول لبقية الأصناف.
                     </p>
                   )}
                   {filteredWarehouseProducts.length === 0 && (
@@ -1999,10 +2208,10 @@ export default function InvoiceNew() {
                                         handleQuantityChange(index, kg)
                                       }}
                                       className={cn(
-                                        'w-full min-w-[4rem] max-w-[7rem] px-1 sm:px-2 py-1 sm:py-1.5 rounded border bg-white dark:bg-gray-800 text-xs sm:text-sm tabular-nums',
+                                        'w-full min-w-[4rem] max-w-[7rem] px-1 sm:px-2 py-1 sm:py-1.5 rounded border bg-white dark:bg-gray-800 text-xs sm:text-sm tabular-nums transition-all',
                                         row.batch_stock != null && row.quantity > row.batch_stock
-                                          ? 'border-red-400 dark:border-red-600'
-                                          : 'border-gray-300 dark:border-gray-600'
+                                          ? 'border-red-500 dark:border-red-400 ring-2 ring-red-500/20'
+                                          : 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
                                       )}
                                     />
                                     <select
@@ -2036,10 +2245,10 @@ export default function InvoiceNew() {
                                   value={row.quantity}
                                   onChange={(e) => handleQuantityChange(index, Number(e.target.value) || 0)}
                                   className={cn(
-                                    'w-full min-w-[5.5rem] max-w-full px-1 sm:px-2 py-1 sm:py-1.5 rounded border bg-white dark:bg-gray-800 text-xs sm:text-sm tabular-nums',
+                                    'w-full min-w-[5.5rem] max-w-full px-1 sm:px-2 py-1 sm:py-1.5 rounded border bg-white dark:bg-gray-800 text-xs sm:text-sm tabular-nums transition-all',
                                     row.batch_stock != null && row.quantity > row.batch_stock
-                                      ? 'border-red-400 dark:border-red-600'
-                                      : 'border-gray-300 dark:border-gray-600'
+                                      ? 'border-red-500 dark:border-red-400 ring-2 ring-red-500/20'
+                                      : 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
                                   )}
                                 />
                               )}
@@ -2173,7 +2382,12 @@ export default function InvoiceNew() {
                                       const kg = row.bulk_input_unit === 'gram' ? val / 1000 : val
                                       handleQuantityChange(index, kg)
                                     }}
-                                    className="w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                                    className={cn(
+                                      'w-full px-2 py-1 text-sm rounded border bg-white dark:bg-gray-800 transition-all',
+                                      row.batch_stock != null && row.quantity > row.batch_stock
+                                        ? 'border-red-500 dark:border-red-400 ring-2 ring-red-500/20'
+                                        : 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
+                                    )}
                                   />
                                   <select
                                     value={row.bulk_input_unit}
@@ -2197,7 +2411,12 @@ export default function InvoiceNew() {
                                   min={0}
                                   value={row.quantity || ''}
                                   onChange={(e) => handleQuantityChange(index, parseInt(e.target.value, 10) || 0)}
-                                  className="w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-bold"
+                                  className={cn(
+                                    'w-full px-2 py-1 text-sm rounded border bg-white dark:bg-gray-800 font-bold transition-all',
+                                    row.batch_stock != null && row.quantity > row.batch_stock
+                                      ? 'border-red-500 dark:border-red-400 ring-2 ring-red-500/20'
+                                      : 'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
+                                  )}
                                 />
                               )}
                             </div>
@@ -2221,6 +2440,7 @@ export default function InvoiceNew() {
                       )
                     })}
                   </div>
+
 
                   {items.length > 0 && (
                     <div className="p-3 sm:p-4 bg-gray-50 dark:bg-gray-700/30 border-t border-gray-200 dark:border-gray-700 space-y-3">
@@ -2265,160 +2485,79 @@ export default function InvoiceNew() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-4">
-            <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              ٣. الدفع والملاحظات
-            </h2>
-            <div
-              className={cn(
-                'grid gap-4',
-                payment_method === 'cash' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'
-              )}
-            >
-              <div>
-                <label className="block text-sm font-medium mb-1">طريقة الدفع *</label>
-                <select
-                  value={payment_method}
-                  onChange={(e) => setPaymentMethod(e.target.value as 'cash' | 'credit')}
-                  className={cn(
-                    'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                    'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-                  )}
-                >
-                  <option value="cash">كاش</option>
-                  <option value="credit">آجل</option>
-                </select>
+
+        </div>
+
+        {/* Docked Actions Bar - Fixed to absolute screen bottom */}
+        <div className="fixed bottom-0 left-0 right-0 md:right-[var(--sidebar-width)] z-30 px-4 sm:px-8 py-3 sm:py-6 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 shadow-[0_-20px_60px_rgba(0,0,0,0.15)] print:hidden rounded-t-[1.5rem] sm:rounded-t-[2.5rem]">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 max-w-7xl mx-auto">
+            <div className="flex items-center justify-between sm:justify-start gap-4 sm:gap-10 w-full sm:w-auto border-b sm:border-b-0 border-gray-100 dark:border-gray-800 pb-2 sm:pb-0">
+              <div className="flex flex-row items-center sm:flex-col sm:items-start gap-2 sm:gap-0.5">
+                <span className="text-[10px] text-gray-500 dark:text-gray-400 font-bold uppercase tracking-wider">الإجمالي:</span>
+                <span className="text-xl sm:text-3xl font-black text-primary-600 dark:text-primary-400 tabular-nums leading-none">
+                  {formatCurrency(finalTotal)}
+                </span>
               </div>
-              {payment_method === 'cash' && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">المبلغ المدفوع (ج.م)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={paid_amount || ''}
-                    onChange={(e) => setPaidAmount(Number(e.target.value) || 0)}
-                    className={cn(
-                      'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                      'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-                    )}
-                    placeholder="0"
-                  />
+              
+              <div className="hidden sm:block h-10 w-px bg-gray-200 dark:bg-gray-700" />
+              
+              <div className="flex items-center gap-4 sm:gap-6 text-[10px] sm:text-[11px]">
+                <div className="flex flex-col items-center sm:items-start">
+                  <span className="text-gray-400 font-medium">الأصناف</span>
+                  <span className="text-gray-900 dark:text-gray-100 font-bold leading-tight">{items.length}</span>
                 </div>
-              )}
+                {payment_method === 'credit' && (
+                  <div className="flex flex-col items-center sm:items-start border-r border-gray-200 dark:border-gray-700 pr-4 sm:pr-6">
+                    <span className="text-gray-400 font-medium">الدفع</span>
+                    <span className="text-amber-600 dark:text-amber-400 font-bold leading-tight">آجل</span>
+                  </div>
+                )}
+              </div>
             </div>
 
-            {payment_method === 'cash' && paid_amount > 0 && (
-              <div>
-                <label className="block text-sm font-medium mb-1">طريقة السداد الفوري</label>
-                <select
-                  value={immediateMethod}
-                  onChange={(e) =>
-                    setImmediateMethod(e.target.value as 'cash' | 'vodafone_cash' | 'instapay')
-                  }
-                  className={cn(
-                    'w-full max-w-md px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                    'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-                  )}
-                >
-                  <option value="cash">نقدي</option>
-                  <option value="vodafone_cash">فودافون كاش</option>
-                  <option value="instapay">انستاباي</option>
-                </select>
-              </div>
-            )}
-
-            {items.length > 0 && (
-              <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-800/40 px-4 py-3 space-y-2">
-                {payment_method === 'credit' ? (
-                  <p className="text-sm font-medium">
-                    إجمالي الفاتورة على الآجل:{' '}
-                    <span className="text-amber-700 dark:text-amber-300">{formatCurrency(finalTotal)}</span>
-                  </p>
-                ) : (
-                  <>
-                    <p className="text-sm font-medium">
-                      المتبقي:{' '}
-                      <span className={remainingUnpaid > 0 ? 'text-amber-700 dark:text-amber-300' : ''}>
-                        {formatCurrency(remainingUnpaid)}
-                      </span>
-                    </p>
-                    {remainingUnpaid > 0 && (
-                      <label className="flex items-center gap-2 cursor-pointer text-sm">
-                        <input
-                          type="checkbox"
-                          checked={registerDeferred}
-                          onChange={(e) => setRegisterDeferred(e.target.checked)}
-                          className="rounded border-gray-300"
-                        />
-                        <span>تسجيل المتبقي كآجل</span>
-                      </label>
-                    )}
-                  </>
-                )}
-                <div>
-                  <label className="block text-sm font-medium mb-1 text-gray-600 dark:text-gray-400">
-                    تاريخ الاستحقاق (اختياري — للمتابعة لاحقاً)
-                  </label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className={cn(
-                      'w-full max-w-xs px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                      'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
-                    )}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium mb-1">ملاحظات</label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => navigate(-1)}
+                className="flex-1 sm:flex-none px-6 py-3 sm:py-4 text-xs sm:text-sm font-bold text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-lg sm:rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all active:scale-95 border border-transparent"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  structuralEditBlocked ||
+                  createMutation.isPending ||
+                  updateMutation.isPending ||
+                  items.length === 0 ||
+                  (!clientId && payment_method !== 'cash') ||
+                  !warehouseId ||
+                  (isEdit && !formHydrated)
+                }
                 className={cn(
-                  'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-                  'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500'
+                  'flex-1 sm:flex-none px-8 sm:px-12 py-3 sm:py-4 text-xs sm:text-base font-black text-white rounded-lg sm:rounded-2xl shadow-xl transition-all active:scale-95',
+                  (items.length === 0 || createMutation.isPending || updateMutation.isPending || structuralEditBlocked || (!clientId && payment_method !== 'cash') || !warehouseId)
+                    ? 'bg-gray-300 dark:bg-gray-800 cursor-not-allowed shadow-none grayscale opacity-50'
+                    : 'bg-primary-600 hover:bg-primary-700 shadow-primary-500/30 hover:shadow-primary-500/50'
                 )}
-                rows={2}
-              />
+              >
+                {createMutation.isPending || updateMutation.isPending ? (
+                  <div className="flex items-center gap-2">
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>جاري الحفظ...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-2">
+                    <CheckCircle2 className="w-6 h-6" />
+                    <span>{isEdit ? 'حفظ التعديلات' : 'إتمام البيع وحفظ الفاتورة'}</span>
+                  </div>
+                )}
+              </button>
             </div>
           </div>
         </div>
-
-        <div className="sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 p-3 -mx-4 sm:mx-0 sm:static sm:border-0 sm:bg-transparent sm:p-0 sm:pt-2 flex gap-3">
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            className="flex-1 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 font-medium hover:bg-gray-50 dark:hover:bg-gray-700"
-          >
-            إلغاء
-          </button>
-          <button
-            type="submit"
-            disabled={
-              structuralEditBlocked ||
-              createMutation.isPending ||
-              updateMutation.isPending ||
-              items.length === 0 ||
-              (!clientId && payment_method !== 'cash') ||
-              !warehouseId ||
-              (isEdit && !formHydrated)
-            }
-            className={cn(
-              'flex-1 py-2.5 rounded-lg font-medium text-white',
-              'bg-primary-600 hover:bg-primary-700 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-              'disabled:opacity-50 disabled:cursor-not-allowed'
-            )}
-          >
-            {createMutation.isPending || updateMutation.isPending
-              ? 'جاري الحفظ...'
-              : isEdit
-                ? 'حفظ التعديلات'
-                : 'إنشاء الفاتورة'}
-          </button>
-        </div>
+        {/* Spacer to prevent fixed footer from covering form content */}
+        <div className="h-32 sm:h-24" aria-hidden="true" />
       </form>
 
       {/* Batch Picker Modal */}

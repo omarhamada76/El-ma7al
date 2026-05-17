@@ -322,7 +322,7 @@ export async function getProductCountFiltered(
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
   const joins = whOk
     ? 'LEFT JOIN product_warehouse_stock pws ON pws.product_id = p.id AND pws.warehouse_id = $1'
-    : 'LEFT JOIN (SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id) s ON s.product_id = p.id'
+    : 'LEFT JOIN LATERAL (SELECT SUM(quantity) AS q FROM product_warehouse_stock WHERE product_id = p.id) s ON TRUE'
   const filter = buildProductsFilterWhere({
     search,
     category,
@@ -362,55 +362,51 @@ export async function getProducts(
   const joins = whOk
     ? `
       LEFT JOIN product_warehouse_stock pws ON pws.product_id = p.id AND pws.warehouse_id = $1
-      LEFT JOIN (
-        SELECT pb.product_id,
+      LEFT JOIN LATERAL (
+        SELECT
           MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_min,
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p.purchase_price) END) AS purchase_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_max,
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p.purchase_price) END) AS purchase_price_max,
           MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_min,
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_max,
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_max,
           COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
         FROM product_batches pb
-        JOIN products p2 ON p2.id = pb.product_id
-        GROUP BY pb.product_id
-      ) ba ON ba.product_id = p.id
-      LEFT JOIN (
-        SELECT bi.product_id,
+        WHERE pb.product_id = p.id
+      ) ba ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
           COUNT(*) AS bulk_bag_count,
           MAX(CASE WHEN bi.status = 'open' AND bi.kg_total > 0.001 AND (bi.kg_remaining / bi.kg_total) < 0.2 THEN 1 ELSE 0 END) AS bulk_open_bag_low
         FROM bag_instances bi
-        WHERE bi.status != 'empty'
-        GROUP BY bi.product_id
-      ) bgi ON bgi.product_id = p.id
+        WHERE bi.product_id = p.id AND bi.status != 'empty'
+      ) bgi ON TRUE
     `
     : `
-      LEFT JOIN (SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id) s ON s.product_id = p.id
-      LEFT JOIN (
-        SELECT pb.product_id,
+      LEFT JOIN LATERAL (SELECT SUM(quantity) AS q FROM product_warehouse_stock WHERE product_id = p.id) s ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
           MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_min,
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p.purchase_price) END) AS purchase_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p2.purchase_price) END) AS purchase_price_max,
+                   THEN COALESCE(NULLIF(pb.purchase_price, 0), p.purchase_price) END) AS purchase_price_max,
           MIN(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_min,
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
-                   THEN COALESCE(NULLIF(pb.selling_price, 0), p2.selling_price) END) AS selling_price_max,
+                   THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_max,
           COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
         FROM product_batches pb
-        JOIN products p2 ON p2.id = pb.product_id
-        GROUP BY pb.product_id
-      ) ba ON ba.product_id = p.id
-      LEFT JOIN (
-        SELECT bi.product_id,
+        WHERE pb.product_id = p.id
+      ) ba ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
           COUNT(*) AS bulk_bag_count,
           MAX(CASE WHEN bi.status = 'open' AND bi.kg_total > 0.001 AND (bi.kg_remaining / bi.kg_total) < 0.2 THEN 1 ELSE 0 END) AS bulk_open_bag_low
         FROM bag_instances bi
-        WHERE bi.status != 'empty'
-        GROUP BY bi.product_id
-      ) bgi ON bgi.product_id = p.id
+        WHERE bi.product_id = p.id AND bi.status != 'empty'
+      ) bgi ON TRUE
     `
 
   const filter = buildProductsFilterWhere({
@@ -476,7 +472,7 @@ export async function getProductsWithStockInWarehouse(warehouseId) {
         pws.quantity,
         p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
-        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at, p.is_active
+        p.expiry_date, p.created_at, p.updated_at, p.is_active
       FROM product_warehouse_stock pws
       JOIN products p ON p.id = pws.product_id
       WHERE pws.warehouse_id = $1 AND pws.quantity > 0
@@ -1434,9 +1430,18 @@ export async function deleteBarn(id) {
 }
 
 export async function getPayments(limit = 50) {
-  const r = await pool.query('SELECT * FROM payments ORDER BY id DESC LIMIT $1', [
-    Math.min(Number(limit) || 50, 200),
-  ])
+  const r = await pool.query(
+    `
+      SELECT p.*, c.name AS client_name, b.name AS barn_name
+      FROM payments p
+      LEFT JOIN clients c ON c.id = p.client_id
+      LEFT JOIN barns b ON b.id = p.barn_id
+      WHERE p.invoice_id IS NULL
+      ORDER BY p.id DESC
+      LIMIT $1
+    `,
+    [Math.min(Number(limit) || 50, 200)]
+  )
   return r.rows
 }
 
@@ -1479,7 +1484,7 @@ export async function getSafeBalance() {
     `
       SELECT COALESCE(SUM(
         CASE
-          WHEN type IN ('initial','customer_payment_in','adjustment_in') THEN amount
+          WHEN type IN ('initial','customer_payment_in','adjustment_in','invoice_payment_in') THEN amount
           ELSE -amount
         END
       ),0) AS balance
@@ -3637,20 +3642,21 @@ async function routePaymentWithClient(q, paymentRow) {
   const amount = Number(paymentRow.amount ?? 0)
   if (method === 'deferred' || method === 'historical_invoice_paid') return
   if (method === 'cash') {
+    const isInvoice = !!paymentRow.invoice_id
     await q.query(
       `
         INSERT INTO safe_transactions (type, amount, reference_type, reference_id, notes, created_at, created_by)
-        VALUES ('customer_payment_in', $1, 'payment', $2, NULL, NOW(), NULL)
+        VALUES ($1, $2, 'payment', $3, $4, NOW(), NULL)
       `,
-      [amount, paymentRow.id]
+      [isInvoice ? 'invoice_payment_in' : 'customer_payment_in', amount, paymentRow.id, paymentRow.notes || null]
     )
   } else if (method === 'vodafone_cash' || method === 'instapay') {
     await q.query(
       `
         INSERT INTO wallet_transactions (type, amount, wallet_id, reference_type, reference_id, notes, created_at, created_by)
-        VALUES ('invoice_payment_in', $1, $2, 'payment', $3, NULL, NOW(), NULL)
+        VALUES ('invoice_payment_in', $1, $2, 'payment', $3, $4, NOW(), NULL)
       `,
-      [amount, paymentRow.wallet_id ?? null, paymentRow.id]
+      [amount, paymentRow.wallet_id ?? null, paymentRow.id, paymentRow.notes || null]
     )
   }
 }

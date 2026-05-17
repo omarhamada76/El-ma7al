@@ -9,12 +9,8 @@ import { canViewFinancials } from '@/lib/roles'
 export default function Reports() {
   const role = useAuthStore((s) => s.user?.role)
   const showFinancials = canViewFinancials(role)
-  const [from, setFrom] = useState(() => {
-    const d = new Date()
-    d.setMonth(d.getMonth() - 1)
-    return d.toISOString().slice(0, 10)
-  })
-  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10))
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard', 'stats', from, to],
@@ -23,31 +19,44 @@ export default function Reports() {
 
   return (
     <div className="space-y-6" dir="rtl">
-      <div>
-        <h1 className="text-2xl font-bold">التقارير</h1>
-        <p className="text-gray-500 dark:text-gray-400 mt-1">
-          نظرة عامة على الأداء والمؤشرات
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-4 items-end">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <label className="block text-sm font-medium mb-1">من تاريخ</label>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-          />
+          <h1 className="text-2xl font-bold">التقارير</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            نظرة عامة على الأداء والمؤشرات
+          </p>
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-1">إلى تاريخ</label>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-          />
+        
+        <div className="flex flex-wrap gap-4 items-end bg-white dark:bg-gray-800/50 p-4 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500">من تاريخ</label>
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-primary-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-gray-500">إلى تاريخ</label>
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              className="px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 focus:ring-2 focus:ring-primary-500 outline-none"
+            />
+          </div>
+          {(from || to) && (
+            <button
+              onClick={() => {
+                setFrom('')
+                setTo('')
+              }}
+              className="px-4 py-1.5 text-sm font-medium text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg transition-colors border border-primary-200 dark:border-primary-800"
+            >
+              عرض الكل
+            </button>
+          )}
         </div>
       </div>
 

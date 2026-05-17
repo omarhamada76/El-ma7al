@@ -145,19 +145,20 @@ export function routePayment(paymentRow, db) {
   const id = paymentRow.id
   if (method === 'deferred' || method === 'historical_invoice_paid') return
   if (method === 'cash') {
+    const isInvoice = !!paymentRow.invoice_id
     d.prepare(
       `
       INSERT INTO safe_transactions (type, amount, reference_type, reference_id, notes, created_at, created_by)
-      VALUES ('customer_payment_in', ?, 'payment', ?, NULL, ?, NULL)
+      VALUES (?, ?, 'payment', ?, ?, ?, NULL)
     `
-    ).run(amount, id, t)
+    ).run(isInvoice ? 'invoice_payment_in' : 'customer_payment_in', amount, id, paymentRow.notes || null, t)
   } else if (method === 'vodafone_cash' || method === 'instapay') {
     d.prepare(
       `
       INSERT INTO wallet_transactions (type, amount, wallet_id, reference_type, reference_id, notes, created_at, created_by)
-      VALUES ('invoice_payment_in', ?, ?, 'payment', ?, NULL, ?, NULL)
+      VALUES ('invoice_payment_in', ?, ?, 'payment', ?, ?, ?, NULL)
     `
-    ).run(amount, paymentRow.wallet_id ?? null, id, t)
+    ).run(amount, paymentRow.wallet_id ?? null, id, paymentRow.notes || null, t)
   }
 }
 
@@ -3174,7 +3175,19 @@ export function deleteInvoice(id) {
 
 // ----- Payments -----
 export function getPayments(limit = 50) {
-  return getDb().prepare('SELECT * FROM payments ORDER BY id DESC LIMIT ?').all(Math.min(limit, 200))
+  return getDb()
+    .prepare(
+      `
+        SELECT p.*, c.name AS client_name, b.name AS barn_name
+        FROM payments p
+        LEFT JOIN clients c ON c.id = p.client_id
+        LEFT JOIN barns b ON b.id = p.barn_id
+        WHERE p.invoice_id IS NULL
+        ORDER BY p.id DESC
+        LIMIT ?
+      `
+    )
+    .all(Math.min(limit, 200))
 }
 
 export function createPayment(data) {
@@ -3227,7 +3240,13 @@ export function getSafeBalance() {
   let balance = 0
   for (const t of rows) {
     const amt = t.amount || 0
-    if (t.type === 'initial' || t.type === 'customer_payment_in' || t.type === 'adjustment_in') balance += amt
+    if (
+      t.type === 'initial' ||
+      t.type === 'customer_payment_in' ||
+      t.type === 'adjustment_in' ||
+      t.type === 'invoice_payment_in'
+    )
+      balance += amt
     else balance -= amt
   }
   return Math.max(0, balance)

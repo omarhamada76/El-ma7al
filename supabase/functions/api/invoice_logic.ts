@@ -20,7 +20,7 @@ export async function syncWarehouseStockFromBatches(q: any, productId: number, w
   )
 }
 
-export async function allocatePieceBatchesFefo(q: any, productId: number, warehouseId: number, totalQty: number) {
+export async function allocatePieceBatchesFefo(q: any, productId: number, warehouseId: number, totalQty: number, preferredBatchId?: number) {
   const rows = await q(
     `SELECT pb.id, pb.quantity, pb.expiry_date
      FROM product_batches pb
@@ -29,8 +29,8 @@ export async function allocatePieceBatchesFefo(q: any, productId: number, wareho
        AND pb.warehouse_id = $2
        AND COALESCE(p.unit_type, 'piece') != 'bulk'
        AND COALESCE(pb.quantity, 0) > 0
-     ORDER BY pb.expiry_date ASC, pb.id ASC`,
-    [productId, warehouseId]
+     ORDER BY (CASE WHEN pb.id = $3 THEN 0 ELSE 1 END) ASC, pb.expiry_date ASC, pb.id ASC`,
+    [productId, warehouseId, preferredBatchId ?? -1]
   )
   
   const totalAvail = rows.rows.reduce((s: number, r: any) => s + Number(r.quantity ?? 0), 0)
@@ -51,7 +51,7 @@ export async function allocatePieceBatchesFefo(q: any, productId: number, wareho
   return out
 }
 
-export async function allocateBulkBagsFefo(q: any, productId: number, warehouseId: number, totalKilos: number) {
+export async function allocateBulkBagsFefo(q: any, productId: number, warehouseId: number, totalKilos: number, preferredBatchId?: number) {
   const rows = await q(
     `SELECT pb.id, pb.kg_remaining, pb.expiry_date
      FROM product_batches pb
@@ -60,8 +60,8 @@ export async function allocateBulkBagsFefo(q: any, productId: number, warehouseI
        AND pb.warehouse_id = $2
        AND p.unit_type = 'bulk'
        AND COALESCE(pb.kg_remaining, 0) > 0
-     ORDER BY pb.expiry_date ASC, pb.id ASC`,
-    [productId, warehouseId]
+     ORDER BY (CASE WHEN pb.id = $3 THEN 0 ELSE 1 END) ASC, pb.expiry_date ASC, pb.id ASC`,
+    [productId, warehouseId, preferredBatchId ?? -1]
   )
   
   const totalAvail = rows.rows.reduce((s: number, r: any) => s + Number(r.kg_remaining ?? 0), 0)
@@ -231,7 +231,7 @@ export async function createInvoiceInternal(q: any, data: any) {
       if (utMap[it.product_id] === 'bulk') {
         const allocs = it.bag_id
           ? await allocateFromSpecificBag(q, it.bag_id, it.product_id, data.warehouse_id, qty)
-          : await allocateBulkBagsFefo(q, it.product_id, data.warehouse_id, qty)
+          : await allocateBulkBagsFefo(q, it.product_id, data.warehouse_id, qty, it.batch_id)
           
         for (const al of allocs) {
           if ((al as any).bag_id) {
@@ -242,20 +242,10 @@ export async function createInvoiceInternal(q: any, data: any) {
         }
         await syncWarehouseStockFromBatches(q, it.product_id, data.warehouse_id)
       } else {
-        if (it.batch_id) {
-          const b = await q('SELECT quantity FROM product_batches WHERE id = $1', [it.batch_id])
-          const avail = Number(b.rows[0]?.quantity ?? 0)
-          if (avail + 0.0001 < qty) {
-            throw new Error(`الكمية المطلوبة تتجاوز المخزون المتاح في هذه الدفعة (متاح: ${avail})`)
-          }
-          await q('UPDATE product_batches SET quantity = GREATEST(0, COALESCE(quantity,0) - $1), updated_at = NOW() WHERE id = $2', [qty, it.batch_id])
-          await q('INSERT INTO invoice_item_batches (invoice_item_id, batch_id, quantity) VALUES ($1,$2,$3)', [itemId, it.batch_id, qty])
-        } else {
-          const allocs = await allocatePieceBatchesFefo(q, it.product_id, data.warehouse_id, qty)
-          for (const al of allocs) {
-            await q('INSERT INTO invoice_item_batches (invoice_item_id, batch_id, quantity) VALUES ($1,$2,$3)', [itemId, al.batch_id, al.quantity])
-            await q('UPDATE product_batches SET quantity = GREATEST(0, COALESCE(quantity,0) - $1), updated_at = NOW() WHERE id = $2', [al.quantity, al.batch_id])
-          }
+        const allocs = await allocatePieceBatchesFefo(q, it.product_id, data.warehouse_id, qty, it.batch_id)
+        for (const al of allocs) {
+          await q('INSERT INTO invoice_item_batches (invoice_item_id, batch_id, quantity) VALUES ($1,$2,$3)', [itemId, al.batch_id, al.quantity])
+          await q('UPDATE product_batches SET quantity = GREATEST(0, COALESCE(quantity,0) - $1), updated_at = NOW() WHERE id = $2', [al.quantity, al.batch_id])
         }
         await syncWarehouseStockFromBatches(q, it.product_id, data.warehouse_id)
       }

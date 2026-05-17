@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileSpreadsheet, Phone, MessageCircle, Plus, ArrowRight, Pencil, Trash2 } from 'lucide-react'
+import { FileSpreadsheet, Phone, MessageCircle, Plus, ArrowRight, Pencil, Trash2, Search } from 'lucide-react'
 import { getClient, getClientBarns, getClientBalance, updateClient, deleteClient } from '@/api/clients'
 import { createBarn, updateBarn } from '@/api/barns'
 import { formatCurrency } from '@/lib/utils'
@@ -27,6 +27,7 @@ export default function ClientDetail() {
   })
   const [addBarnOpen, setAddBarnOpen] = useState(false)
   const [editBarn, setEditBarn] = useState<{ id: number; name: string; initial_debt: number } | null>(null)
+  const [barnSearch, setBarnSearch] = useState('')
   
   const updateBarnMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: { name: string; initial_debt: number } }) =>
@@ -69,6 +70,10 @@ export default function ClientDetail() {
     queryFn: () => getClientBalance(id!),
     enabled: !!id && showFinancials,
   })
+  
+  const filteredBarns = barns.filter((barn) =>
+    barn.name.toLowerCase().includes(barnSearch.toLowerCase())
+  )
 
   const stats = balanceData ?? {
     total_account: client?.initial_debt ?? 0,
@@ -203,14 +208,27 @@ export default function ClientDetail() {
       )}
 
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">العنابر</h2>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-3 bg-gray-50/50 dark:bg-gray-800/30 p-3 rounded-xl border border-gray-100 dark:border-gray-700/50">
+          <div className="flex items-center gap-4 w-full sm:w-auto">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-200 shrink-0">العنابر</h2>
+            <div className="relative flex-1 sm:w-64 group">
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 group-focus-within:text-primary-500 transition-colors" />
+              <input
+                type="text"
+                value={barnSearch}
+                onChange={(e) => setBarnSearch(e.target.value)}
+                placeholder="بحث باسم العنبر..."
+                className="w-full pl-3 pr-9 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all outline-none"
+              />
+            </div>
+          </div>
           <button
             type="button"
             onClick={() => setAddBarnOpen(true)}
-            className="text-sm px-3 py-1.5 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-medium"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary-600 text-white hover:bg-primary-700 font-bold shadow-sm transition-all active:scale-95"
           >
-            إضافة عنبر
+            <Plus className="w-4 h-4" />
+            إضافة عنبر جديد
           </button>
         </div>
         <AddBarnModal
@@ -232,12 +250,23 @@ export default function ClientDetail() {
           }}
         />
         {barns.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
-            لا توجد عنابر. أضف عنبراً جديداً.
+          <p className="text-gray-500 dark:text-gray-400 p-8 text-center rounded-xl border border-dashed border-gray-300 dark:border-gray-600 bg-gray-50/30 dark:bg-gray-800/20">
+            لا توجد عنابر مسجلة لهذا العميل.
           </p>
+        ) : filteredBarns.length === 0 ? (
+          <div className="text-center p-12 bg-gray-50 dark:bg-gray-800/40 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
+            <Search className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+            <p className="text-gray-500 dark:text-gray-400 font-medium">لا توجد نتائج تطابق "{barnSearch}"</p>
+            <button 
+              onClick={() => setBarnSearch('')}
+              className="mt-3 text-sm text-primary-600 hover:underline font-bold"
+            >
+              مسح البحث
+            </button>
+          </div>
         ) : (
-          <ul className="grid sm:grid-cols-2 gap-3">
-            {barns.map((barn) => (
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredBarns.map((barn) => (
               <li key={barn.id} className="relative group">
                 <Link
                   to={`/barns/${barn.id}`}

@@ -318,13 +318,15 @@ export default function InvoiceDetail() {
             <Share2 className="w-4 h-4" />
             {sharing ? 'جاري التجهيز…' : 'مشاركة PDF عبر واتساب'}
           </button>
-          <Link
-            to={`/clients/${invoice.client_id}`}
-            className="text-sm text-primary-600 dark:text-primary-400 hover:underline inline-flex items-center"
-          >
-            عرض العميل
-            <ArrowRight className="w-4 h-4 inline mr-1" />
-          </Link>
+          {invoice.client_id != null && (
+            <Link
+              to={`/clients/${invoice.client_id}`}
+              className="text-sm text-primary-600 dark:text-primary-400 hover:underline inline-flex items-center"
+            >
+              عرض العميل
+              <ArrowRight className="w-4 h-4 inline mr-1" />
+            </Link>
+          )}
         </div>
       </div>
 

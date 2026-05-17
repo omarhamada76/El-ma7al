@@ -681,22 +681,26 @@ Deno.serve(async (req) => {
       const password = String(body.password || '')
       if (!email || !password) return send(400, { message: 'البريد وكلمة المرور مطلوبان' })
 
-      // Source of truth for password validation: Supabase Auth (auth.users).
+      // 1. Source of truth for registration: the application's users table.
+      const local = await query(
+        `select id, email, password_hash, display_name, role, is_active
+         from users
+         where lower(email) = lower($1)
+         limit 1`,
+        [email],
+      )
+      const appUser = local.rows?.[0] as Record<string, unknown> | undefined
+      if (!appUser) return send(401, { message: 'البريد أو كلمة المرور غير صحيحة' })
+      if (appUser.is_active === false) return send(403, { message: 'الحساب غير مفعل' })
+
+      // 2. Verify password (preferring Supabase Auth).
       let authUser = await verifySupabaseAuthUser(email, password)
       if (!authUser) {
-        // Backfill path for users created previously in app table only.
-        const local = await query(
-          `select id, email, password_hash, display_name, role, is_active
-           from users
-           where lower(email) = lower($1)
-           limit 1`,
-          [email],
-        )
-        const appUser = local.rows?.[0] as Record<string, unknown> | undefined
-        if (!appUser) return send(401, { message: 'البريد أو كلمة المرور غير صحيحة' })
-        if (appUser.is_active === false) return send(403, { message: 'الحساب غير مفعل' })
+        // Backfill path: verify against local password_hash if not in Supabase Auth yet.
         const valid = await verifyPassword(password, String(appUser.password_hash || ''))
         if (!valid) return send(401, { message: 'البريد أو كلمة المرور غير صحيحة' })
+        
+        // Sync to Supabase Auth for standard verification in future sessions.
         await ensureAuthUserByEmail({
           email,
           password,
@@ -707,38 +711,30 @@ Deno.serve(async (req) => {
         if (!authUser) return send(401, { message: 'البريد أو كلمة المرور غير صحيحة' })
       }
 
-      const role = String(
-        (authUser.raw_user_meta_data as Record<string, unknown> | undefined)?.role || 'staff',
-      )
-      const displayName = String(
-        (authUser.raw_user_meta_data as Record<string, unknown> | undefined)?.display_name ||
-        (authUser.raw_user_meta_data as Record<string, unknown> | undefined)?.name ||
-        email.split('@')[0],
-      )
+      const role = String(appUser.role || 'staff')
+      const displayName = String(appUser.display_name || email.split('@')[0])
       const hash = await hashPassword(password)
-      const upsert = await query(
-        `insert into users (email, password_hash, display_name, role, is_active, created_at, updated_at)
-         values ($1,$2,$3,$4,true,now(),now())
-         on conflict (email) do update
-         set password_hash = excluded.password_hash,
-             display_name = coalesce(users.display_name, excluded.display_name),
+      
+      // Update the user record with latest password hash (and ensure email matches casing)
+      await query(
+        `update users
+         set password_hash = $2,
              updated_at = now()
-         returning id, email, display_name, role, is_active`,
-        [email, hash, displayName, role],
+         where id = $1`,
+        [appUser.id, hash],
       )
-      const row = upsert.rows?.[0] as Record<string, unknown> | undefined
-      if (!row) return send(401, { message: 'البريد أو كلمة المرور غير صحيحة' })
+      
       const user = {
-        id: row.id,
-        email: row.email,
-        display_name: row.display_name,
-        role: row.role,
-        is_active: row.is_active,
+        id: appUser.id,
+        email: appUser.email,
+        display_name: appUser.display_name,
+        role: appUser.role,
+        is_active: appUser.is_active,
       }
       const accessToken = await signJWT({
-        sub: String(row.id),
-        email: String(row.email),
-        role: String(row.role),
+        sub: String(appUser.id),
+        email: String(appUser.email),
+        role: String(appUser.role),
       })
       return send(200, { accessToken, refreshToken: accessToken, user })
     }
@@ -785,20 +781,29 @@ Deno.serve(async (req) => {
       await requireAuth(req)
       const wid = Number(whProductsWithStock[1])
       const out = await query(
-        `select p.*, coalesce(s.quantity,0) as stock
+        `select p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
+                p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
+                p.expiry_date, p.is_active, p.created_at, p.updated_at,
+                s.quantity as stock
          from product_warehouse_stock s
          join products p on p.id = s.product_id
-         where s.warehouse_id = $1 and coalesce(s.quantity,0) > 0
+         where s.warehouse_id = $1 and s.quantity > 0
          order by p.id desc`,
         [wid],
       )
-      return send(200, out.rows.map((r) => ({ product: r, stock: Number((r as { stock: string | number }).stock ?? 0) })))
+      return send(200, out.rows.map((r) => ({ product: r, stock: Number((r as any).stock ?? 0) })))
     }
 
     const whBatches = path.match(/^\/warehouses\/(\d+)\/batches$/)
     if (method === 'GET' && whBatches) {
       await requireAuth(req)
-      const out = await query('select * from product_batches where warehouse_id = $1 order by id desc', [Number(whBatches[1])])
+      const out = await query(
+        `select * from product_batches 
+         where warehouse_id = $1 
+         and (quantity > 0 or kg_remaining > 0)
+         order by id desc`,
+        [Number(whBatches[1])]
+      )
       return send(200, out.rows)
     }
 
@@ -1208,6 +1213,7 @@ Deno.serve(async (req) => {
       const unpriced = sp.get('unpriced') === 'true'
       const expiring = sp.get('expiring') === 'true'
       const expired = sp.get('expired') === 'true'
+      const out_of_stock = sp.get('out_of_stock') === 'true'
       const idsParam = sp.get('ids')
 
       // Helper for Arabic character normalization (Alef, Yaa, Teh Marbuta, Hamza)
@@ -1264,24 +1270,36 @@ Deno.serve(async (req) => {
         if (category) {
           where.push(`p.category = ${addWhereParam(category)}`)
         }
-        if (warehouse_id) {
-          where.push(`p.id in (select product_id from product_warehouse_stock where warehouse_id = ${addWhereParam(Number(warehouse_id))})`)
-        }
         if (low_stock) {
-          where.push(`(select coalesce(sum(quantity),0) from product_warehouse_stock s where s.product_id = p.id) <= (case when p.unit_type = 'bulk' then coalesce(p.alert_level_kg, p.alert_level) else coalesce(p.alert_level, 0) end)`)
+          if (warehouse_id) {
+             where.push(`coalesce((select sum(quantity) from product_warehouse_stock s where s.product_id = p.id and s.warehouse_id = ${addWhereParam(Number(warehouse_id))}), 0) <= (case when p.unit_type = 'bulk' then coalesce(p.alert_level_kg, p.alert_level) else coalesce(p.alert_level, 0) end)`)
+          } else {
+             where.push(`coalesce((select sum(quantity) from product_warehouse_stock s where s.product_id = p.id), 0) <= (case when p.unit_type = 'bulk' then coalesce(p.alert_level_kg, p.alert_level) else coalesce(p.alert_level, 0) end)`)
+          }
         }
         if (unpriced) {
           where.push(`coalesce(p.selling_price, 0) = 0`)
         }
+        if (out_of_stock) {
+          if (warehouse_id) {
+             where.push(`coalesce((select sum(quantity) from product_warehouse_stock s where s.product_id = p.id and s.warehouse_id = ${addWhereParam(Number(warehouse_id))}), 0) = 0`)
+          } else {
+             where.push(`coalesce((select sum(quantity) from product_warehouse_stock s where s.product_id = p.id), 0) = 0`)
+          }
+        }
         if (expiring) {
-          where.push(
-            `exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date <= (now() + interval '30 days') and b.expiry_date >= now()::date and coalesce(b.quantity,0) > 0)`
-          )
+          if (warehouse_id) {
+            where.push(`exists (select 1 from product_batches b where b.product_id = p.id and b.warehouse_id = ${addWhereParam(Number(warehouse_id))} and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date <= (now() + interval '6 months') and b.expiry_date >= now()::date and (coalesce(b.quantity,0) > 0 or coalesce(b.kg_remaining,0) > 0))`)
+          } else {
+            where.push(`exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date <= (now() + interval '6 months') and b.expiry_date >= now()::date and (coalesce(b.quantity,0) > 0 or coalesce(b.kg_remaining,0) > 0))`)
+          }
         }
         if (expired) {
-          where.push(
-            `(p.expiry_date is not null and p.expiry_date != '9999-12-31' and p.expiry_date < now()::date) or exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date < now()::date and coalesce(b.quantity,0) > 0)`
-          )
+          if (warehouse_id) {
+            where.push(`(p.expiry_date is not null and p.expiry_date != '9999-12-31' and p.expiry_date < now()::date) or exists (select 1 from product_batches b where b.product_id = p.id and b.warehouse_id = ${addWhereParam(Number(warehouse_id))} and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date < now()::date and coalesce(b.quantity,0) > 0)`)
+          } else {
+            where.push(`(p.expiry_date is not null and p.expiry_date != '9999-12-31' and p.expiry_date < now()::date) or exists (select 1 from product_batches b where b.product_id = p.id and b.expiry_date is not null and b.expiry_date != '9999-12-31' and b.expiry_date < now()::date and coalesce(b.quantity,0) > 0)`)
+          }
         }
         if (idsParam) {
           const idList = idsParam.split(',').map(Number).filter(n => !isNaN(n))
@@ -1329,6 +1347,8 @@ Deno.serve(async (req) => {
           when lower(p.name) = ${pExact} then 2 
           ${batchPriority}
           else 4 end, p.id desc`
+      } else if (expiring || expired) {
+        orderBy = 'b.nearest_expiry asc nulls last, p.id desc'
       }
 
       const pLimit = addListParam(limit)
@@ -1345,6 +1365,7 @@ Deno.serve(async (req) => {
            b.purchase_price_max,
            b.selling_price_min,
            b.selling_price_max,
+           b.nearest_expiry,
            coalesce(bi.bulk_bag_count, 0) as bulk_bag_count,
            coalesce(bi.bulk_open_bag_low, false) as bulk_open_bag_low
          from products p
@@ -1359,9 +1380,10 @@ Deno.serve(async (req) => {
            select min(pb.purchase_price) as purchase_price_min,
                   max(pb.purchase_price) as purchase_price_max,
                   min(pb.selling_price) as selling_price_min,
-                  max(pb.selling_price) as selling_price_max
+                  max(pb.selling_price) as selling_price_max,
+                   min(case when pb.expiry_date is not null and pb.expiry_date != '9999-12-31' then pb.expiry_date end) as nearest_expiry
            from product_batches pb
-           where pb.product_id = p.id and coalesce(pb.quantity,0) > 0
+           where pb.product_id = p.id and (coalesce(pb.quantity,0) > 0 or coalesce(pb.kg_remaining,0) > 0)
              ${whParam ? `and pb.warehouse_id = ${whParam}` : ''}
          ) b on true
          left join lateral (
@@ -2507,8 +2529,8 @@ Deno.serve(async (req) => {
             (
               coalesce((select sum(initial_debt) from clients),0) +
               coalesce((select sum(initial_debt) from barns),0) +
-              coalesce((select sum(total_amount) from invoices where coalesce(invoice_lifecycle,'active') != 'cancelled'),0) -
-              coalesce((select sum(case when coalesce(payment_method,'') in ('deferred','آجل','credit') then 0 else amount end) from payments),0)
+              coalesce((select sum(total_amount) from invoices where coalesce(invoice_lifecycle,'active') != 'cancelled' and client_id is not null),0) -
+              coalesce((select sum(case when coalesce(payment_method,'') in ('deferred','آجل','credit') then 0 else amount end) from payments where client_id is not null),0)
             ) as client_debt,
             coalesce((select sum(amount) from payments where payment_method = 'deferred' and settled_at is null),0) as total_deferred_receivable
         `),

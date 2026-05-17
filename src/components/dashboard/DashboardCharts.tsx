@@ -159,8 +159,8 @@ export default function DashboardCharts({ from, to }: DashboardChartsProps) {
             ) : !hasDaily ? (
               <p className="flex h-full items-center justify-center text-sm text-gray-500 dark:text-gray-400">
                 {rangeActive
-                  ? 'لا توجد مبيعات في الفترة المحددة'
-                  : 'لا توجد مبيعات مسجلة في آخر 30 يوماً'}
+                   ? 'لا توجد مبيعات في الفترة المحددة'
+                   : 'لا توجد مبيعات مسجلة مؤخراً'}
               </p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">

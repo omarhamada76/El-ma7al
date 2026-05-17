@@ -699,7 +699,7 @@ const handlers = {
   'GET /api/v1/warehouses/:id/products-with-stock': async (req, res, _body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
-    const list = await db.getProductsInWarehouse(id)
+    const list = await db.getProductsWithStockInWarehouse(id)
     send(res, 200, list)
   },
   'GET /api/v1/warehouses/:id/batches': async (req, res, _body, { pathParts }) => {
