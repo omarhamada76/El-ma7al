@@ -783,7 +783,7 @@ Deno.serve(async (req) => {
       const out = await query(
         `select p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
                 p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
-                p.expiry_date, p.is_active, p.created_at, p.updated_at,
+                p.expiry_date, p.image_url, p.is_active, p.created_at, p.updated_at,
                 s.quantity as stock
          from product_warehouse_stock s
          join products p on p.id = s.product_id
