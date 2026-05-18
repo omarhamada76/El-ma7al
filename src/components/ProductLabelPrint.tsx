@@ -69,19 +69,22 @@ function LabelStickerBody({
         height: '25mm',
         display: 'flex',
         flexDirection: 'column',
-        justifyContent: 'center',
+        justifyContent: 'safe center',
         alignItems: 'center',
         textAlign: 'center',
         boxSizing: 'border-box',
         gap: '0',
-        overflow: 'visible',
+        overflow: 'hidden',
+        paddingLeft: horizontalOffset > 0 ? `${horizontalOffset * 2}mm` : '0',
+        paddingRight: horizontalOffset < 0 ? `${Math.abs(horizontalOffset) * 2}mm` : '0',
       }}
     >
       <div style={{ 
         position: 'relative', 
-        display: 'inline-block', 
+        display: 'flex',
+        justifyContent: 'safe center',
+        width: '100%',
         lineHeight: 0,
-        transform: `translateX(${horizontalOffset}mm)`,
       }}>
         <Barcode
           value={barcodeValue}
@@ -100,15 +103,20 @@ function LabelStickerBody({
           marginTop: '0',
           display: 'flex',
           flexDirection: 'row',
-          justifyContent: 'center',
+          justifyContent: 'safe center',
           alignItems: 'center',
-          gap: '4mm',
+          gap: '2mm',
           fontFamily: 'system-ui, -apple-system, sans-serif',
           lineHeight: 1,
           color: '#000000',
           fontSize: `${fontSize}pt`,
           fontWeight: 800,
           letterSpacing: '0.5px',
+          width: '100%',
+          maxWidth: '100%',
+          boxSizing: 'border-box',
+          padding: '0 1mm',
+          overflow: 'visible',
         }}
       >
         <div style={{ whiteSpace: 'nowrap' }}>
@@ -253,7 +261,6 @@ export default function ProductLabelPrint({
     justify-content: flex-start !important;
     align-items: center !important;
     padding: 0 !important;
-    overflow: hidden !important;
     box-sizing: border-box !important;
     page-break-after: always !important;
     break-after: page !important;
@@ -323,7 +330,7 @@ export default function ProductLabelPrint({
 
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">
-              إزاحة الباركود: <span className="text-primary-600 dark:text-primary-400 font-bold">{horizontalOffset > 0 ? `+${horizontalOffset}` : horizontalOffset}mm</span>
+              إزاحة المحتوى (يمين/يسار): <span className="text-primary-600 dark:text-primary-400 font-bold">{horizontalOffset > 0 ? `+${horizontalOffset}` : horizontalOffset}mm</span>
             </label>
             <input
               type="range"
@@ -437,7 +444,7 @@ export default function ProductLabelPrint({
           {pages.slice(0, 3).map((page, i) => (
             <div
               key={i}
-              className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/40 flex flex-col justify-start items-center overflow-hidden shadow-sm"
+              className="rounded-lg border border-dashed border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900/40 flex flex-col justify-start items-center overflow-visible shadow-sm"
               style={{ width: `${LABEL_WIDTH_MM}mm`, height: `${LABEL_HEIGHT_MM}mm`, boxSizing: 'border-box' }}
             >
               <div className="w-full border-b border-dashed border-gray-200 dark:border-gray-700">

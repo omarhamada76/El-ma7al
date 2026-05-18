@@ -1354,13 +1354,60 @@ Deno.serve(async (req) => {
       const pLimit = addListParam(limit)
       const pOffset = addListParam(offset)
 
+      let stockSelect = whParam
+        ? `coalesce(pws.quantity, 0) as warehouse_stock`
+        : `coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock`
+
+      let wsJoin = `left join lateral (
+        select sum(s.quantity) as batch_total_quantity
+        from product_warehouse_stock s
+        where s.product_id = p.id
+         ${whParam ? `and s.warehouse_id = ${whParam}` : 'and s.warehouse_id = 1'}
+      ) ws on true`
+
+      if (expiring) {
+        stockSelect = `coalesce((
+          select sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end)
+          from product_batches pb
+          where pb.product_id = p.id and pb.warehouse_id = ${whParam ? whParam : '1'}
+            and pb.expiry_date is not null and pb.expiry_date != '9999-12-31' 
+            and pb.expiry_date <= (now() + interval '6 months') and pb.expiry_date >= now()::date
+        ), 0) as warehouse_stock`
+
+        wsJoin = `left join lateral (
+          select coalesce(sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end), 0) as batch_total_quantity
+          from product_batches pb
+          where pb.product_id = p.id
+            and pb.expiry_date is not null and pb.expiry_date != '9999-12-31' 
+            and pb.expiry_date <= (now() + interval '6 months') and pb.expiry_date >= now()::date
+            ${whParam ? `and pb.warehouse_id = ${whParam}` : ''}
+        ) ws on true`
+      } else if (expired) {
+        stockSelect = `coalesce((
+          select sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end)
+          from product_batches pb
+          where pb.product_id = p.id and pb.warehouse_id = ${whParam ? whParam : '1'}
+            and pb.expiry_date is not null and pb.expiry_date != '9999-12-31' 
+            and pb.expiry_date < now()::date
+        ), 0) as warehouse_stock`
+
+        wsJoin = `left join lateral (
+          select coalesce(sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end), 0) as batch_total_quantity
+          from product_batches pb
+          where pb.product_id = p.id
+            and pb.expiry_date is not null and pb.expiry_date != '9999-12-31' 
+            and pb.expiry_date < now()::date
+            ${whParam ? `and pb.warehouse_id = ${whParam}` : ''}
+        ) ws on true`
+      }
+
       const list = await query(
         `select
            p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
            p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date,
            p.image_url, 
            coalesce(ws.batch_total_quantity, 0) as batch_total_quantity,
-           ${whParam ? `coalesce(pws.quantity, 0) as warehouse_stock,` : 'coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock,'}
+           ${stockSelect},
            b.purchase_price_min,
            b.purchase_price_max,
            b.selling_price_min,
@@ -1369,12 +1416,7 @@ Deno.serve(async (req) => {
            coalesce(bi.bulk_bag_count, 0) as bulk_bag_count,
            coalesce(bi.bulk_open_bag_low, false) as bulk_open_bag_low
          from products p
-         left join lateral (
-           select sum(s.quantity) as batch_total_quantity
-           from product_warehouse_stock s
-           where s.product_id = p.id
-            ${whParam ? `and s.warehouse_id = ${whParam}` : 'and s.warehouse_id = 1'}
-         ) ws on true
+         ${wsJoin}
          ${whParam ? `left join product_warehouse_stock pws on pws.product_id = p.id and pws.warehouse_id = ${whParam}` : ''}
          left join lateral (
            select min(pb.purchase_price) as purchase_price_min,

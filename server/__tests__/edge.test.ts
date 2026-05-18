@@ -15,11 +15,11 @@ describe('Edge-case parsing behavior', () => {
   })
 
   it('parseScannedBarcode reads pure batch shorthand digits', () => {
-    expect(parseScannedBarcode('0124')).toEqual({ kind: 'batch', batchId: 124 })
+    expect(parseScannedBarcode('0124')).toEqual({ kind: 'batch', batchId: 124, isExplicit: false, rawToken: '0124' })
   })
 
   it('parseScannedBarcode reads bag barcode', () => {
-    expect(parseScannedBarcode('G15')).toEqual({ kind: 'bag', bagInstanceId: 15 })
+    expect(parseScannedBarcode('G15')).toEqual({ kind: 'bag', bagInstanceId: 15, isExplicit: true, rawToken: 'G15' })
   })
 
   it('parseScannedBarcode reads composite product payload', () => {
@@ -30,6 +30,7 @@ describe('Edge-case parsing behavior', () => {
       productName: 'فيتامين',
       batchId: 77,
       expiryDate: '2026-12-31',
+      rawToken: 'ABC123||18.5||فيتامين||77||2026-12-31',
     })
   })
 

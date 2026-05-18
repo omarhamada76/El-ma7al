@@ -77,6 +77,8 @@ export default function Barcode({
         ...style,
         shapeRendering: 'crispEdges',
         display: 'block',
+        maxWidth: '100%',
+        height: 'auto',
       }}
       role="img"
       aria-label={`Barcode ${value}`}

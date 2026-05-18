@@ -1032,18 +1032,104 @@ export function getProductCountFiltered(search, category, warehouseId = null, lo
 
 export function getProducts(search, category, limit = 100, offset = 0, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false, expired = false) {
   const d = getDb()
-  const params = []
-  let sql
+  const whOk = warehouseId != null && Number.isInteger(warehouseId)
+
+  let batchTotalQtySelect;
+  if (expiring) {
+    batchTotalQtySelect = `COALESCE(SUM(
+      CASE WHEN (
+        (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) >= date('now') AND date(pb.expiry_date) <= date('now', '+90 days'))
+        OR
+        ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) >= date('now') AND date(px.expiry_date) <= date('now', '+90 days'))
+      ) THEN (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+      ELSE 0 END
+    ), 0) AS batch_total_quantity`;
+  } else if (expired) {
+    batchTotalQtySelect = `COALESCE(SUM(
+      CASE WHEN (
+        (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) < date('now'))
+        OR
+        ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) < date('now'))
+      ) THEN (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+      ELSE 0 END
+    ), 0) AS batch_total_quantity`;
+  } else {
+    batchTotalQtySelect = `COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity`;
+  }
+
+  let stockSelect;
+  let stockSelectParams = []
+  if (whOk) {
+    if (expiring) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        LEFT JOIN products px ON px.id = pb.product_id
+        WHERE pb.product_id = p.id AND pb.warehouse_id = ?
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) >= date('now') AND date(pb.expiry_date) <= date('now', '+90 days'))
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) >= date('now') AND date(px.expiry_date) <= date('now', '+90 days'))
+          )
+      ), 0) AS warehouse_stock`;
+      stockSelectParams.push(warehouseId)
+    } else if (expired) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        LEFT JOIN products px ON px.id = pb.product_id
+        WHERE pb.product_id = p.id AND pb.warehouse_id = ?
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) < date('now'))
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) < date('now'))
+          )
+      ), 0) AS warehouse_stock`;
+      stockSelectParams.push(warehouseId)
+    } else {
+      stockSelect = `COALESCE(pws.quantity, 0) AS warehouse_stock`;
+    }
+  } else {
+    if (expiring) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        LEFT JOIN products px ON px.id = pb.product_id
+        WHERE pb.product_id = p.id
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) >= date('now') AND date(pb.expiry_date) <= date('now', '+90 days'))
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) >= date('now') AND date(px.expiry_date) <= date('now', '+90 days'))
+          )
+      ), 0) AS warehouse_stock`;
+    } else if (expired) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        LEFT JOIN products px ON px.id = pb.product_id
+        WHERE pb.product_id = p.id
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != '9999-12-31' AND date(pb.expiry_date) < date('now'))
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = '9999-12-31') AND px.expiry_date IS NOT NULL AND date(px.expiry_date) < date('now'))
+          )
+      ), 0) AS warehouse_stock`;
+    } else {
+      stockSelect = `COALESCE(s.q, 0) AS warehouse_stock`;
+    }
+  }
+
   const batchAgg = `
     LEFT JOIN (
-      SELECT product_id,
-        MIN(purchase_price) AS purchase_price_min,
-        MAX(purchase_price) AS purchase_price_max,
-        MIN(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_min,
-        MAX(CASE WHEN quantity > 0 AND selling_price > 0 THEN selling_price WHEN kg_remaining > 0 AND selling_price > 0 THEN selling_price END) AS selling_price_max,
-        COALESCE(SUM(CASE WHEN unit_type = 'bulk' THEN kg_remaining ELSE quantity END), 0) AS batch_total_quantity
-      FROM product_batches
-      GROUP BY product_id
+      SELECT pb.product_id,
+        MIN(pb.purchase_price) AS purchase_price_min,
+        MAX(pb.purchase_price) AS purchase_price_max,
+        MIN(CASE WHEN pb.quantity > 0 AND pb.selling_price > 0 THEN pb.selling_price WHEN pb.kg_remaining > 0 AND pb.selling_price > 0 THEN pb.selling_price END) AS selling_price_min,
+        MAX(CASE WHEN pb.quantity > 0 AND pb.selling_price > 0 THEN pb.selling_price WHEN pb.kg_remaining > 0 AND pb.selling_price > 0 THEN pb.selling_price END) AS selling_price_max,
+        ${batchTotalQtySelect}
+      FROM product_batches pb
+      LEFT JOIN products px ON px.id = pb.product_id
+      GROUP BY pb.product_id
     ) ba ON ba.product_id = p.id
     LEFT JOIN (
       SELECT bi.product_id,
@@ -1053,72 +1139,70 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
       WHERE bi.status != 'empty'
       GROUP BY bi.product_id
     ) bgi ON bgi.product_id = p.id`
-  const useAlias = lowStock || unpriced || expiring || expired
+
+  let pwsJoin = ''
+  let pwsJoinParams = []
+  if (whOk) {
+    pwsJoin = `LEFT JOIN product_warehouse_stock pws ON pws.product_id = p.id AND pws.warehouse_id = ?`
+    pwsJoinParams.push(warehouseId)
+  } else {
+    pwsJoin = `LEFT JOIN (SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id) s ON s.product_id = p.id`
+  }
+
+  const params = []
+  if (whOk && (expiring || expired)) {
+    params.push(...stockSelectParams)
+  }
+  if (whOk) {
+    params.push(...pwsJoinParams)
+  }
+
+  let sql = `SELECT p.*,
+    ${stockSelect},
+    ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
+    bgi.bulk_bag_count, bgi.bulk_open_bag_low
+    FROM products p
+    ${batchAgg}
+    ${pwsJoin}
+    WHERE 1=1`
+
   if (lowStock) {
-    if (warehouseId != null && Number.isInteger(warehouseId)) {
-      sql = `
-        SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-          bgi.bulk_bag_count, bgi.bulk_open_bag_low
-        FROM products p
-        ${batchAgg}
-        INNER JOIN product_warehouse_stock pws ON p.id = pws.product_id AND pws.warehouse_id = ?
-        WHERE (
-          (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND pws.quantity <= p.alert_level)
-          OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND pws.quantity <= p.alert_level_kg)
-        )`
-      params.push(warehouseId)
-    } else {
-      sql = `
-        SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-          bgi.bulk_bag_count, bgi.bulk_open_bag_low
-        FROM products p
-        ${batchAgg}
-        LEFT JOIN (
-          SELECT product_id, SUM(quantity) AS q FROM product_warehouse_stock GROUP BY product_id
-        ) s ON s.product_id = p.id
-        WHERE (
-          (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND COALESCE(s.q, 0) <= p.alert_level)
-          OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND COALESCE(s.q, 0) <= p.alert_level_kg)
-        )`
-    }
-  } else if (unpriced) {
-    sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-        bgi.bulk_bag_count, bgi.bulk_open_bag_low
-      FROM products p
-      ${batchAgg}
-      WHERE (p.selling_price IS NULL OR p.selling_price <= 0)`
-  } else if (expiring) {
-    const batchExists = sqlNearExpiryBatchExists(warehouseId)
-    sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-        bgi.bulk_bag_count, bgi.bulk_open_bag_low
-      FROM products p
-      ${batchAgg}
-      WHERE (
-        (p.expiry_date IS NOT NULL
-          AND date(p.expiry_date) >= date('now')
-          AND date(p.expiry_date) <= date('now', '+90 days'))
-        OR ${batchExists}
+    if (whOk) {
+      sql += ` AND (
+        (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND COALESCE(pws.quantity, 0) <= p.alert_level)
+        OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND COALESCE(pws.quantity, 0) <= p.alert_level_kg)
       )`
-    if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
+    } else {
+      sql += ` AND (
+        (COALESCE(p.unit_type, 'piece') != 'bulk' AND p.alert_level > 0 AND COALESCE(s.q, 0) <= p.alert_level)
+        OR (p.unit_type = 'bulk' AND COALESCE(p.alert_level_kg, 0) > 0 AND COALESCE(s.q, 0) <= p.alert_level_kg)
+      )`
+    }
+  }
+
+  if (unpriced) {
+    sql += ' AND (p.selling_price IS NULL OR p.selling_price <= 0)'
+  }
+
+  if (expiring) {
+    const batchExists = sqlNearExpiryBatchExists(warehouseId)
+    sql += ` AND (
+      (p.expiry_date IS NOT NULL
+        AND date(p.expiry_date) >= date('now')
+        AND date(p.expiry_date) <= date('now', '+90 days'))
+      OR ${batchExists}
+    )`
+    if (whOk) params.push(warehouseId)
   } else if (expired) {
     const batchExists = sqlExpiredBatchExists(warehouseId)
-    sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-        bgi.bulk_bag_count, bgi.bulk_open_bag_low
-      FROM products p
-      ${batchAgg}
-      WHERE (
-        (p.expiry_date IS NOT NULL
-          AND date(p.expiry_date) < date('now'))
-        OR ${batchExists}
-      )`
-    if (warehouseId != null && Number.isInteger(warehouseId)) params.push(warehouseId)
-  } else {
-    sql = `SELECT p.*, ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
-        bgi.bulk_bag_count, bgi.bulk_open_bag_low
-      FROM products p
-      ${batchAgg}
-      WHERE 1=1`
+    sql += ` AND (
+      (p.expiry_date IS NOT NULL
+        AND date(p.expiry_date) < date('now'))
+      OR ${batchExists}
+    )`
+    if (whOk) params.push(warehouseId)
   }
+
   if (search) {
     sql += ' AND LOWER(p.name) LIKE ?'
     params.push(`%${search.toLowerCase()}%`)
@@ -1128,7 +1212,6 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
     params.push(category)
   }
 
-  // Handle archived products if column exists
   if (!showArchived) {
     try {
       const cols = d.prepare('PRAGMA table_info(products)').all()

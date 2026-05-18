@@ -359,6 +359,85 @@ export async function getProducts(
   expired = false
 ) {
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
+
+  let batchTotalQtySelect;
+  if (expiring) {
+    batchTotalQtySelect = `COALESCE(SUM(
+      CASE WHEN (
+        (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date >= CURRENT_DATE AND pb.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+        OR
+        ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date >= CURRENT_DATE AND p.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+      ) THEN (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+      ELSE 0 END
+    ), 0) AS batch_total_quantity`;
+  } else if (expired) {
+    batchTotalQtySelect = `COALESCE(SUM(
+      CASE WHEN (
+        (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date < CURRENT_DATE)
+        OR
+        ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date < CURRENT_DATE)
+      ) THEN (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+      ELSE 0 END
+    ), 0) AS batch_total_quantity`;
+  } else {
+    batchTotalQtySelect = `COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity`;
+  }
+
+  let stockSelect;
+  if (whOk) {
+    if (expiring) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id AND pb.warehouse_id = $1
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date >= CURRENT_DATE AND pb.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date >= CURRENT_DATE AND p.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+          )
+      ), 0) AS warehouse_stock`;
+    } else if (expired) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id AND pb.warehouse_id = $1
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date < CURRENT_DATE)
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date < CURRENT_DATE)
+          )
+      ), 0) AS warehouse_stock`;
+    } else {
+      stockSelect = `COALESCE(pws.quantity, 0) AS warehouse_stock`;
+    }
+  } else {
+    if (expiring) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date >= CURRENT_DATE AND pb.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date >= CURRENT_DATE AND p.expiry_date <= CURRENT_DATE + INTERVAL '90 days')
+          )
+      ), 0) AS warehouse_stock`;
+    } else if (expired) {
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id
+          AND (
+            (pb.expiry_date IS NOT NULL AND pb.expiry_date != DATE '9999-12-31' AND pb.expiry_date < CURRENT_DATE)
+            OR
+            ((pb.expiry_date IS NULL OR pb.expiry_date = DATE '9999-12-31') AND p.expiry_date IS NOT NULL AND p.expiry_date < CURRENT_DATE)
+          )
+      ), 0) AS warehouse_stock`;
+    } else {
+      stockSelect = `COALESCE(s.q, 0) AS warehouse_stock`;
+    }
+  }
+
   const joins = whOk
     ? `
       LEFT JOIN product_warehouse_stock pws ON pws.product_id = p.id AND pws.warehouse_id = $1
@@ -372,7 +451,7 @@ export async function getProducts(
                    THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
                    THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_max,
-          COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
+          ${batchTotalQtySelect}
         FROM product_batches pb
         WHERE pb.product_id = p.id
       ) ba ON TRUE
@@ -396,7 +475,7 @@ export async function getProducts(
                    THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_min,
           MAX(CASE WHEN (COALESCE(pb.unit_type, 'piece') = 'bulk' AND pb.kg_remaining > 0) OR (COALESCE(pb.unit_type, 'piece') != 'bulk' AND pb.quantity > 0)
                    THEN COALESCE(NULLIF(pb.selling_price, 0), p.selling_price) END) AS selling_price_max,
-          COALESCE(SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END), 0) AS batch_total_quantity
+          ${batchTotalQtySelect}
         FROM product_batches pb
         WHERE pb.product_id = p.id
       ) ba ON TRUE
@@ -429,7 +508,7 @@ export async function getProducts(
       SELECT p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg, 
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg, p.expiry_date, 
         p.image_url, p.notes, p.is_active, p.created_at, p.updated_at,
-        ${whOk ? 'COALESCE(pws.quantity, 0)' : 'COALESCE(s.q, 0)'} AS warehouse_stock,
+        ${stockSelect},
         ba.purchase_price_min, ba.purchase_price_max, ba.selling_price_min, ba.selling_price_max, ba.batch_total_quantity,
         bgi.bulk_bag_count, bgi.bulk_open_bag_low
       FROM products p
@@ -472,7 +551,7 @@ export async function getProductsWithStockInWarehouse(warehouseId) {
         pws.quantity,
         p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
         p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
-        p.expiry_date, p.created_at, p.updated_at, p.is_active
+        p.expiry_date, p.image_url, p.notes, p.created_at, p.updated_at, p.is_active
       FROM product_warehouse_stock pws
       JOIN products p ON p.id = pws.product_id
       WHERE pws.warehouse_id = $1 AND pws.quantity > 0
