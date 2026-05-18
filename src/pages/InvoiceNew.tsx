@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams, useMatch, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X, CheckCircle2, Users, Wallet, Zap, Banknote, CreditCard } from 'lucide-react'
+import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X, CheckCircle2, Users, Wallet, Zap, Banknote, CreditCard, Loader2 } from 'lucide-react'
 import { playScanFeedback } from '@/lib/scanFeedback'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import type { Client } from '@/types/api'
@@ -14,6 +14,7 @@ import {
   lookupProductBatchById,
   getWarehouseBatches,
   getBagInstance,
+  getWarehousePickerData,
 } from '@/api/products'
 import type { ProductBatch } from '@/types/api'
 import { createInvoice, getInvoice, updateInvoice } from '@/api/invoices'
@@ -91,6 +92,35 @@ function getLastWarehouseId(): string {
     return ''
   }
 }
+
+function ProductImageFetcher({ productId, className = "h-9 w-9 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white mt-0.5" }: { productId: number, className?: string }) {
+  const { data: product } = useQuery({
+    queryKey: ['product', productId],
+    queryFn: () => getProduct(String(productId)),
+    enabled: !!productId,
+    staleTime: 5 * 60_000,
+  })
+
+  if (product?.image_url) {
+    return (
+      <img
+        src={product.image_url}
+        alt=""
+        className={className}
+      />
+    )
+  }
+
+  const isSmall = className.includes('w-10') || className.includes('w-9') || className.includes('h-9')
+  const iconSizeClass = isSmall ? 'h-4.5 w-4.5' : 'w-5 h-5'
+
+  return (
+    <div className={cn("flex items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400 shrink-0", className)}>
+      <Package className={iconSizeClass} />
+    </div>
+  )
+}
+
 
 export default function InvoiceNew() {
   const navigate = useNavigate()
@@ -233,19 +263,23 @@ export default function InvoiceNew() {
   })
 
   const {
-    data: productsWithStock = [],
+    data: pickerData = { productsWithStock: [], warehouseBatches: [], topSellingRows: [] },
     isFetching: productsLoading,
-    isFetched: productsQueryFetched,
+    isFetched: pickerDataFetched,
     error: productsError,
   } = useQuery({
-    queryKey: ['products', 'warehouse', warehouseId],
-    queryFn: () => {
-      console.log('Fetching products for warehouse:', warehouseId)
-      return getProductsWithStockInWarehouse(Number(warehouseId))
-    },
+    queryKey: ['warehouse-picker-data', warehouseId],
+    queryFn: () => getWarehousePickerData(Number(warehouseId)),
     enabled: !!warehouseId,
     staleTime: 30_000,
   })
+
+  const productsWithStock = pickerData.productsWithStock
+  const warehouseBatches = pickerData.warehouseBatches
+  const topSellingRows = pickerData.topSellingRows
+
+  const productsQueryFetched = pickerDataFetched
+  const warehouseBatchesFetched = pickerDataFetched
 
   useEffect(() => {
     if (productsWithStock.length > 0) {
@@ -253,28 +287,6 @@ export default function InvoiceNew() {
     }
   }, [productsWithStock.length])
 
-  const { data: topSellingRows = [] } = useQuery({
-    queryKey: ['reports', 'top-products', 'invoice-picker', warehouseId],
-    queryFn: async () => {
-      try {
-        return await getTopProducts({
-          limit: 10,
-          warehouse_id: Number(warehouseId),
-        })
-      } catch {
-        return []
-      }
-    },
-    enabled: !!warehouseId,
-    staleTime: 60_000,
-  })
-
-  const { data: warehouseBatches = [], isFetched: warehouseBatchesFetched } = useQuery({
-    queryKey: ['warehouse-batches', warehouseId],
-    queryFn: () => getWarehouseBatches(Number(warehouseId)),
-    enabled: !!warehouseId,
-    staleTime: 30_000,
-  })
 
   const batchesByProduct = useMemo(() => {
     const map = new Map<number, ProductBatch[]>()
@@ -478,6 +490,7 @@ export default function InvoiceNew() {
       queryClient.invalidateQueries({ queryKey: ['reports'] })
       queryClient.invalidateQueries({ queryKey: ['products', 'warehouse', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-batches', warehouseId] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-picker-data', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['product'] })
@@ -505,6 +518,7 @@ export default function InvoiceNew() {
       queryClient.invalidateQueries({ queryKey: ['reports'] })
       queryClient.invalidateQueries({ queryKey: ['products', 'warehouse', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-batches', warehouseId] })
+      queryClient.invalidateQueries({ queryKey: ['warehouse-picker-data', warehouseId] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['product'] })
@@ -567,11 +581,16 @@ export default function InvoiceNew() {
   }, [remainingUnpaid, effectivePaidAmount])
 
   const deferredProductSearch = useDeferredValue(productSearch)
-  const filteredWarehouseProducts = deferredProductSearch.trim()
-    ? productsWithStock.filter(({ product }) => {
-      const q = normalizeSearchText(deferredProductSearch)
-      const isNumeric = /^\d+$/.test(q)
-      const nameMatch = normalizeSearchText(product.name).includes(q)
+  
+  const filteredWarehouseProducts = useMemo(() => {
+    const trimmed = deferredProductSearch.trim()
+    if (!trimmed) return productsWithStock
+    
+    const q = normalizeSearchText(trimmed)
+    const isNumeric = /^\d+$/.test(q)
+    
+    return productsWithStock.filter(({ product }) => {
+      const nameMatch = product.name && normalizeSearchText(product.name).includes(q)
 
       if (isNumeric) {
         return nameMatch || String(product.id) === q || (product.barcode && (product.barcode === q || product.barcode.endsWith(q)))
@@ -582,8 +601,9 @@ export default function InvoiceNew() {
         String(product.id).includes(q)
       )
     })
-    : productsWithStock
-  const showProductList = warehouseId && productsWithStock.length > 0
+  }, [productsWithStock, deferredProductSearch])
+  
+  const showProductList = !!warehouseId
 
   const warehouseProductsSortedForPicker = useMemo(() => {
     const rank = new Map<number, number>()
@@ -593,23 +613,50 @@ export default function InvoiceNew() {
         rank.set(row.product_id, idx++)
       }
     }
+    
     const list = [...filteredWarehouseProducts]
-    const sorted = list.sort((a, b) => {
-      const q = normalizeSearchText(deferredProductSearch)
-      if (q) {
-        const aBar = normalizeSearchText(a.product.barcode || '')
-        const bBar = normalizeSearchText(b.product.barcode || '')
-        if (aBar === q && bBar !== q) return -1
-        if (bBar === q && aBar !== q) return 1
+    const trimmed = deferredProductSearch.trim()
+    
+    if (!trimmed) {
+      list.sort((a, b) => {
+        const ra = rank.get(a.product.id)
+        const rb = rank.get(b.product.id)
+        const inTopA = ra !== undefined
+        const inTopB = rb !== undefined
+        if (inTopA && inTopB && ra !== rb) return ra - rb
+        if (inTopA !== inTopB) return inTopA ? -1 : 1
+        return a.product.name.localeCompare(b.product.name, 'ar')
+      })
+      return list.slice(0, 10)
+    }
 
-        const aId = String(a.product.id)
-        const bId = String(b.product.id)
-        const qNum = parseInt(q, 10)
-        const aMatchesId = aId === q || (!isNaN(qNum) && a.product.id === qNum)
-        const bMatchesId = bId === q || (!isNaN(qNum) && b.product.id === qNum)
-        if (aMatchesId && !bMatchesId) return -1
-        if (bMatchesId && !aMatchesId) return 1
-      }
+    const q = normalizeSearchText(trimmed)
+    const qNum = parseInt(q, 10)
+    const isQNum = !isNaN(qNum)
+    
+    const meta = new Map<number, { bar: string; idStr: string }>()
+    for (const item of list) {
+      meta.set(item.product.id, {
+        bar: item.product.barcode ? normalizeSearchText(item.product.barcode) : '',
+        idStr: String(item.product.id)
+      })
+    }
+
+    const sorted = list.sort((a, b) => {
+      const ma = meta.get(a.product.id)!
+      const mb = meta.get(b.product.id)!
+      
+      const aBar = ma.bar
+      const bBar = mb.bar
+      if (aBar === q && bBar !== q) return -1
+      if (bBar === q && aBar !== q) return 1
+
+      const aId = ma.idStr
+      const bId = mb.idStr
+      const aMatchesId = aId === q || (isQNum && a.product.id === qNum)
+      const bMatchesId = bId === q || (isQNum && b.product.id === qNum)
+      if (aMatchesId && !bMatchesId) return -1
+      if (bMatchesId && !aMatchesId) return 1
 
       const ra = rank.get(a.product.id)
       const rb = rank.get(b.product.id)
@@ -620,8 +667,8 @@ export default function InvoiceNew() {
       return a.product.name.localeCompare(b.product.name, 'ar')
     })
 
-    // Limit to 10 for initial view, or 50 for search results to keep UI snappy
-    return deferredProductSearch.trim() ? sorted.slice(0, 50) : sorted.slice(0, 10)
+    // Limit to 50 for search results to keep UI snappy
+    return sorted.slice(0, 50)
   }, [filteredWarehouseProducts, topSellingRows, deferredProductSearch])
 
   const formatExpiry = (d: string) => formatExpiryMonth(d)
@@ -1892,70 +1939,86 @@ export default function InvoiceNew() {
                     <input
                       type="search"
                       value={productSearch}
+                      disabled={productsLoading && productsWithStock.length === 0}
                       onChange={(e) => setProductSearch(e.target.value)}
                       placeholder="بحث في منتجات المخزن..."
                       className={cn(
                         'w-full py-2 ps-11 pe-3 rounded-lg border bg-white dark:bg-gray-800',
-                        'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 text-sm'
+                        'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 text-sm',
+                        'disabled:opacity-50 disabled:cursor-not-allowed'
                       )}
                     />
                   </div>
-                  <ul className="max-h-72 overflow-y-auto space-y-2 text-sm pr-1">
-                    {warehouseProductsSortedForPicker.map(({ product, stock }) => {
-                      const inInvoice = items.some((i) => i.product_id === product.id)
-                      const pBatches = batchesByProduct.get(product.id)
-                      const nearest = pBatches?.[0]
-                      return (
-                        <li
-                          key={product.id}
-                          className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 hover:border-primary-300 dark:hover:border-primary-700 transition-all shadow-sm"
-                        >
-                          <div className="flex justify-between items-start gap-2">
-                            <div className="min-w-0 flex-1">
-                              <p className="font-bold text-gray-900 dark:text-gray-100 truncate">{product.name}</p>
-                              <p className="text-[10px] text-gray-500 font-mono">#{product.id}</p>
-                              {nearest && nearest.expiry_date !== '9999-12-31' && (
-                                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
-                                  تنتهي: {formatExpiryMonth(nearest.expiry_date)}
-                                </p>
-                              )}
-                            </div>
-                            <div className="text-left shrink-0">
-                              <p className={cn(
-                                "text-xs font-bold",
-                                stock === 0 ? "text-red-500" : "text-primary-600 dark:text-primary-400"
-                              )}>
-                                {product.unit_type === 'bulk' ? `${formatNumber(stock, 2)} كجم` : formatNumber(stock, 0)}
-                              </p>
-                              <p className="text-[10px] text-gray-400">مخزون</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => addProductToInvoice({ product, stock })}
-                            className={cn(
-                              "w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors",
-                              inInvoice 
-                                ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800 hover:bg-primary-100 dark:hover:bg-primary-900/40"
-                                : "bg-primary-600 text-white hover:bg-primary-700 shadow-sm shadow-primary-200 dark:shadow-none"
-                            )}
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            {inInvoice ? 'أضف المزيد' : 'إضافة للفاتورة'}
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                  {!productSearch.trim() && topSellingRows.length > 0 && (
-                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2 font-medium">
-                      يتم عرض أفضل ١٠ منتجات مبيعاً لتسريع التحميل — استخدم البحث للوصول لبقية الأصناف.
-                    </p>
-                  )}
-                  {filteredWarehouseProducts.length === 0 && (
-                    <p className="text-sm text-gray-500 dark:text-gray-400 py-2">
-                      {productSearch.trim() ? 'لا توجد نتائج للبحث.' : 'لا توجد منتجات.'}
-                    </p>
+                  {productsLoading && productsWithStock.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-20 gap-3 text-gray-400 dark:text-gray-500">
+                      <Loader2 className="w-8 h-8 animate-spin text-primary-600 dark:text-primary-400" />
+                      <p className="text-sm font-medium">جاري تحميل المنتجات...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <ul className="max-h-[30rem] overflow-y-auto space-y-2 text-sm pr-1">
+                        {warehouseProductsSortedForPicker.map(({ product, stock }) => {
+                          const inInvoice = items.some((i) => i.product_id === product.id)
+                          const pBatches = batchesByProduct.get(product.id)
+                          const nearest = pBatches?.[0]
+                          return (
+                            <li
+                              key={product.id}
+                              className="flex flex-col gap-2 p-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/40 hover:border-primary-300 dark:hover:border-primary-700 transition-all shadow-sm"
+                            >
+                              <div className="flex justify-between items-start gap-2">
+                                <div className="min-w-0 flex-1 flex gap-2">
+                                    <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center shrink-0 border border-gray-100 dark:border-gray-700">
+                                      <Package className="w-5 h-5 text-gray-400 dark:text-gray-600" />
+                                    </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-bold text-gray-900 dark:text-gray-100 truncate" title={product.name}>{product.name}</p>
+                                    <p className="text-[10px] text-gray-500 font-mono">#{product.id}</p>
+                                    {nearest && nearest.expiry_date !== '9999-12-31' && (
+                                      <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                                        تنتهي: {formatExpiryMonth(nearest.expiry_date)}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="text-left shrink-0">
+                                  <p className={cn(
+                                    "text-xs font-bold",
+                                    stock === 0 ? "text-red-500" : "text-primary-600 dark:text-primary-400"
+                                  )}>
+                                    {product.unit_type === 'bulk' ? `${formatNumber(stock, 2)} كجم` : formatNumber(stock, 0)}
+                                  </p>
+                                  <p className="text-[10px] text-gray-400">مخزون</p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => addProductToInvoice({ product, stock })}
+                                className={cn(
+                                  "w-full py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors",
+                                  inInvoice 
+                                    ? "bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800 hover:bg-primary-100 dark:hover:bg-primary-900/40"
+                                    : "bg-primary-600 text-white hover:bg-primary-700 shadow-sm shadow-primary-200 dark:shadow-none"
+                                )}
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                {inInvoice ? 'أضف المزيد' : 'إضافة للفاتورة'}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                      {!productSearch.trim() && topSellingRows.length > 0 && (
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-2 font-medium">
+                          يتم عرض أفضل ١٠ منتجات مبيعاً لتسريع التحميل — استخدم البحث للوصول لبقية الأصناف.
+                        </p>
+                      )}
+                      {filteredWarehouseProducts.length === 0 && (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 py-2">
+                          {productSearch.trim() ? 'لا توجد نتائج للبحث.' : 'لا توجد منتجات مسجلة في هذا المخزن.'}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -2004,7 +2067,7 @@ export default function InvoiceNew() {
                     </button>
                   </div>
                 </div>
-                {warehouseId && productsWithStock.length === 0 && (
+                {warehouseId && productsWithStock.length === 0 && !productsLoading && (
                   <p className="text-sm text-amber-600 dark:text-amber-400 mb-2">
                     لا توجد منتجات مسجلة. أضف منتجات من صفحة المخزون أولاً.
                   </p>
@@ -2078,17 +2141,7 @@ export default function InvoiceNew() {
                             </td>
                             <td className="py-2 px-1.5 sm:px-3 align-top min-w-[12rem]">
                               <div className="flex items-start gap-2.5 min-w-0">
-                                {pEntries?.product.image_url ? (
-                                  <img
-                                    src={pEntries.product.image_url}
-                                    alt=""
-                                    className="h-9 w-9 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white mt-0.5"
-                                  />
-                                ) : (
-                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400 mt-0.5">
-                                    <Package className="h-4.5 w-4.5" />
-                                  </div>
-                                )}
+                                <ProductImageFetcher productId={row.product_id} />
                                 <div className="space-y-1 min-w-0 flex-1">
                                   {isBulkProduct && (
                                     <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold">منتج بالوزن (كجم)</span>
@@ -2319,20 +2372,7 @@ export default function InvoiceNew() {
                                 <GripVertical className="w-4 h-4 text-gray-300 dark:text-gray-600" />
                               </div>
                               <div className="flex gap-3 min-w-0">
-                                {(() => {
-                                  const p = productsWithStock.find((p) => p.product.id === row.product_id)?.product
-                                  return p?.image_url ? (
-                                    <img
-                                      src={p.image_url}
-                                      alt=""
-                                      className="h-10 w-10 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white"
-                                    />
-                                  ) : (
-                                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-400">
-                                      <Package className="h-5 w-5" />
-                                    </div>
-                                  )
-                                })()}
+                                <ProductImageFetcher productId={row.product_id} className="h-10 w-10 shrink-0 rounded object-cover border border-gray-200 dark:border-gray-700 bg-white" />
                                 <div className="min-w-0">
                                   {isBulkProduct && (
                                     <span className="inline-block text-[10px] bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded font-bold mb-1">منتج بالوزن</span>

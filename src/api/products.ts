@@ -172,6 +172,22 @@ export async function getWarehouseBatches(
   return Array.isArray(res) ? res : []
 }
 
+export interface WarehousePickerData {
+  productsWithStock: { product: Product; stock: number }[]
+  warehouseBatches: ProductBatch[]
+  topSellingRows: any[]
+}
+
+export async function getWarehousePickerData(
+  warehouseId: number
+): Promise<WarehousePickerData> {
+  const res = await api.get<WarehousePickerData>(`/warehouses/${warehouseId}/picker-data`)
+  return res && typeof res === 'object'
+    ? res
+    : { productsWithStock: [], warehouseBatches: [], topSellingRows: [] }
+}
+
+
 export type ProductBatchLookup =
   | { status: 'ok'; batch: ProductBatch }
   | { status: 'not_found' }

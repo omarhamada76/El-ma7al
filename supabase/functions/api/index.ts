@@ -19,6 +19,10 @@ const pool = new pg.Pool({
   ssl: { rejectUnauthorized: false },
 })
 
+let cachedTopProducts: any[] | null = null
+let lastTopProductsFetchTime = 0
+
+
 /** Same cap as server/db.js — data URLs must fit in JSON + DB TEXT. */
 const MAX_PRODUCT_IMAGE_URL_LEN = 800_000
 function normalizeProductImageUrl(v: unknown): string | null {
@@ -806,6 +810,68 @@ Deno.serve(async (req) => {
       )
       return send(200, out.rows)
     }
+
+    const whPickerData = path.match(/^\/warehouses\/(\d+)\/picker-data$/)
+    if (method === 'GET' && whPickerData) {
+      await requireAuth(req)
+      const wid = Number(whPickerData[1])
+      
+      const client = await pool.connect()
+      try {
+        const productsOut = await client.query(
+          `select p.id, p.name, p.company, p.category, p.barcode, p.unit_type, p.bag_weight_kg,
+                  p.purchase_price, p.selling_price, p.alert_level, p.alert_level_kg,
+                  p.expiry_date, p.is_active, p.created_at, p.updated_at,
+                  s.quantity as stock
+           from product_warehouse_stock s
+           join products p on p.id = s.product_id
+           where s.warehouse_id = $1 and s.quantity > 0
+           order by p.id desc`,
+          [wid]
+        )
+        
+        const batchesOut = await client.query(
+          `select * from product_batches 
+           where warehouse_id = $1 
+           and (quantity > 0 or kg_remaining > 0)
+           order by id desc`,
+          [wid]
+        )
+        
+        let topSellingRows: any[] = []
+        const now = Date.now()
+        if (cachedTopProducts && (now - lastTopProductsFetchTime) < 60_000) {
+          topSellingRows = cachedTopProducts
+        } else {
+          const topProductsOut = await client.query(
+            `select ii.product_id,
+                    coalesce(p.name, ii.product_name) as name,
+                    coalesce(sum(ii.total_price),0) as total_sales,
+                    coalesce(sum(ii.quantity),0) as total_quantity
+             from invoice_items ii
+             join invoices i on i.id = ii.invoice_id
+             left join products p on p.id = ii.product_id
+             where coalesce(i.invoice_lifecycle,'active') != 'cancelled'
+             group by ii.product_id, coalesce(p.name, ii.product_name)
+             order by total_sales desc
+             limit 10`,
+            []
+          )
+          topSellingRows = topProductsOut.rows
+          cachedTopProducts = topSellingRows
+          lastTopProductsFetchTime = now
+        }
+
+        return send(200, {
+          productsWithStock: productsOut.rows.map((r) => ({ product: r, stock: Number((r as any).stock ?? 0) })),
+          warehouseBatches: batchesOut.rows,
+          topSellingRows: topSellingRows
+        })
+      } finally {
+        client.release()
+      }
+    }
+
 
     if (method === 'GET' && path === '/categories/options') {
       await requireAuth(req)
