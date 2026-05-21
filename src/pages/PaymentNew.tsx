@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { getClients, getClientBarns } from '@/api/clients'
+import { getClients, getClientBarns, getClientBalance } from '@/api/clients'
 import { createPayment } from '@/api/payments'
-import { cn } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
+import ClientSearchCombobox from '@/components/ClientSearchCombobox'
+import { Wallet, Building2 } from 'lucide-react'
 
 export default function PaymentNew() {
   const navigate = useNavigate()
@@ -61,6 +63,12 @@ export default function PaymentNew() {
   const { data: barns = [] } = useQuery({
     queryKey: ['client', clientId, 'barns'],
     queryFn: () => getClientBarns(clientId),
+    enabled: !!clientId,
+  })
+
+  const { data: liveBalance, isLoading: balanceLoading } = useQuery({
+    queryKey: ['client', clientId, 'balance'],
+    queryFn: () => getClientBalance(clientId),
     enabled: !!clientId,
   })
 
@@ -123,7 +131,7 @@ export default function PaymentNew() {
         durationMs={1700}
         onComplete={() => {
           setPaymentSuccess(false)
-          navigate('/payments')
+          navigate(paymentMethod === 'discount' ? '/discounts' : '/payments')
         }}
       />
       <h1 className="text-2xl font-bold">
@@ -183,51 +191,104 @@ export default function PaymentNew() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">العميل *</label>
-          <select
+          <label className="block text-sm font-medium mb-2">العميل *</label>
+          <ClientSearchCombobox
+            clients={clients}
             value={clientId}
-            onChange={(e) => handleClientChange(e.target.value)}
-            className={cn(
-              'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-              'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 focus:border-transparent'
-            )}
-            required
-          >
-            <option value="">— اختر العميل —</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.phone ? ` — ${c.phone}` : ''}
-              </option>
-            ))}
-          </select>
+            onChange={handleClientChange}
+            showBalance
+          />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium mb-1">العنبر</label>
-          <select
-            value={barnId}
-            onChange={(e) => setBarnId(e.target.value)}
-            disabled={!clientId}
-            className={cn(
-              'w-full px-3 py-2 rounded-lg border bg-white dark:bg-gray-800',
-              'border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary-500 focus:border-transparent',
-              !clientId && 'opacity-60 cursor-not-allowed'
+        {/* Live balance card — appears after selecting a client */}
+        {clientId && (
+          <div className="rounded-2xl border border-gray-200/60 dark:border-gray-700/60 bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm overflow-hidden animate-modal-in">
+            {balanceLoading ? (
+              <div className="p-4 flex gap-3">
+                <div className="h-10 w-10 rounded-xl bg-gray-100 dark:bg-gray-700 animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3 w-24 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                  <div className="h-5 w-32 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                </div>
+              </div>
+            ) : liveBalance ? (
+              <div className="grid grid-cols-3 divide-x divide-x-reverse divide-gray-100 dark:divide-gray-700">
+                <div className="p-3 text-center">
+                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                    <Wallet className="w-3 h-3" /> الرصيد
+                  </p>
+                  <p className={cn(
+                    'text-sm font-black tabular-nums',
+                    liveBalance.balance <= 0 ? 'text-emerald-600 dark:text-emerald-400' :
+                    liveBalance.balance >= 5000 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'
+                  )}>
+                    {formatCurrency(liveBalance.balance)}
+                  </p>
+                </div>
+                <div className="p-3 text-center">
+                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                    إجمالي الحساب
+                  </p>
+                  <p className="text-sm font-bold tabular-nums text-gray-700 dark:text-gray-300">
+                    {formatCurrency(liveBalance.total_account)}
+                  </p>
+                </div>
+                <div className="p-3 text-center">
+                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                    إجمالي السداد
+                  </p>
+                  <p className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(liveBalance.total_paid)}
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {/* Barn quick-picker */}
+            {barns.length > 0 && (
+              <div className="border-t border-gray-100 dark:border-gray-700 p-3">
+                <p className="text-[10px] font-bold text-gray-400 uppercase mb-2 flex items-center gap-1">
+                  <Building2 className="w-3 h-3" /> اختر العنبر (اختياري)
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setBarnId('')}
+                    className={cn(
+                      'px-2.5 py-1 rounded-lg text-xs font-medium transition-all',
+                      !barnId
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    )}
+                  >
+                    عام
+                  </button>
+                  {barns.map((b) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => setBarnId(String(b.id))}
+                      className={cn(
+                        'px-2.5 py-1 rounded-lg text-xs font-medium transition-all',
+                        barnId === String(b.id)
+                          ? 'bg-primary-600 text-white'
+                          : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      )}
+                    >
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
-          >
-            <option value="">— عام (بدون تحديد عنبر) —</option>
-            {barns.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-          {clientId && barns.length === 0 && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-              لا توجد عنابر مسجلة لهذا العميل. سيتم تسجيل الحركة على الحساب العام.
-            </p>
-          )}
-        </div>
+            {clientId && barns.length === 0 && (
+              <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-2">
+                <p className="text-xs text-gray-400">
+                  لا توجد عنابر مسجلة لهذا العميل — سيتم تسجيل الحركة على الحساب العام.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium mb-1">

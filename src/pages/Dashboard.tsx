@@ -140,8 +140,9 @@ export default function Dashboard() {
 
   const cardClass = (light: string) =>
     cn(
-      'rounded-lg sm:rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden',
-      'transition-colors hover:border-primary-400 dark:hover:border-primary-600',
+      'rounded-xl sm:rounded-2xl border border-gray-200/60 dark:border-gray-700/60 overflow-hidden',
+      'transition-all duration-300 hover:border-primary-400 dark:hover:border-primary-600',
+      'hover:-translate-y-1 hover:shadow-lg hover:shadow-primary-500/10 dark:hover:shadow-primary-400/10',
       'focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900',
       'text-right w-full block',
       light
@@ -359,21 +360,30 @@ export default function Dashboard() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">
-            امسح الباركود لفتح فاتورة جديدة وإضافة المنتج:
-          </p>
-          <input
-            type="text"
-            data-scanner-input="true"
-            placeholder="امسح الباركود هنا..."
-            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-primary-500"
-            lang="en"
-            dir="ltr"
-            inputMode="text"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-          />
+          {/* Laser Scanner HUD */}
+          <div className="rounded-2xl border border-gray-200/60 dark:border-gray-700/60 bg-white/60 dark:bg-gray-800/60 backdrop-blur-sm p-4 shadow-sm">
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3 flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+              امسح الباركود لفتح فاتورة جديدة
+            </p>
+            {/* Scanner field with laser sweep animation */}
+            <div className="relative overflow-hidden rounded-xl border-2 border-dashed border-red-400/40 dark:border-red-500/30 bg-gradient-to-b from-red-50/30 to-transparent dark:from-red-950/10">
+              <div className="animate-laser" aria-hidden="true" />
+              <input
+                type="text"
+                data-scanner-input="true"
+                placeholder="امسح الباركود هنا..."
+                className="relative z-10 w-full bg-transparent px-4 py-3.5 text-sm text-center font-mono placeholder:text-gray-400/70 focus:outline-none focus:ring-0 border-0"
+                lang="en"
+                dir="ltr"
+                inputMode="text"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+            <p className="mt-2 text-xs text-center text-gray-400 dark:text-gray-500">الباركود يُكتشف تلقائياً من القارئ</p>
+          </div>
           <Modal
             open={accountStatementOpen}
             onClose={() => {

@@ -75,6 +75,7 @@ export default function PaymentDetail() {
   const hasBarnBalanceSnapshot = barnBefore !== undefined && barnAfter !== undefined
 
   async function handleShareWhatsApp() {
+    if (!payment) return
     setShareError('')
     setSharing(true)
     try {
@@ -100,16 +101,16 @@ export default function PaymentDetail() {
       ) : null}
       <div>
         <Link
-          to="/payments"
+          to={payment.payment_method === 'discount' ? '/discounts' : '/payments'}
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors"
         >
           <ArrowRight className="w-4 h-4 shrink-0" />
-          سجل السداد
+          {payment.payment_method === 'discount' ? 'سجل الخصومات' : 'سجل السداد'}
         </Link>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">
-              تفاصيل السداد
+              {payment.payment_method === 'discount' ? 'تفاصيل الخصم' : 'تفاصيل السداد'}
             </h1>
             <span className="inline-flex items-center rounded-full bg-primary-100 dark:bg-primary-900/40 px-3 py-1 text-sm font-semibold text-primary-800 dark:text-primary-200">
               #{payment.id}
@@ -133,7 +134,9 @@ export default function PaymentDetail() {
         <div className="p-6 sm:p-8">
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-6">
             <div>
-              <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">مبلغ السداد</p>
+              <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                {payment.payment_method === 'discount' ? 'قيمة الخصم' : 'مبلغ السداد'}
+              </p>
               <p className="text-3xl sm:text-4xl font-bold tabular-nums text-gray-900 dark:text-white tracking-tight">
                 {formatCurrency(payment.amount)}
               </p>
@@ -142,14 +145,18 @@ export default function PaymentDetail() {
               <div className="flex items-start gap-2">
                 <Calendar className="w-5 h-5 text-gray-400 shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-gray-500 dark:text-gray-400">تاريخ السداد</p>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    {payment.payment_method === 'discount' ? 'تاريخ الخصم' : 'تاريخ السداد'}
+                  </p>
                   <p className="font-medium text-gray-900 dark:text-gray-100">{formatDate(payment.payment_date)}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">
                 <Banknote className="w-5 h-5 text-gray-400 shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-gray-500 dark:text-gray-400">طريقة السداد</p>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    {payment.payment_method === 'discount' ? 'نوع الحركة' : 'طريقة السداد'}
+                  </p>
                   <p className="font-medium text-gray-900 dark:text-gray-100">
                     {paymentMethodLabel(payment.payment_method)}
                   </p>
@@ -163,15 +170,17 @@ export default function PaymentDetail() {
       {hasBarnBalanceSnapshot ? (
         <section className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/80 p-5 sm:p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
-            رصيد العنبر (لحظة تسجيل السداد)
+            رصيد العنبر (لحظة تسجيل {payment.payment_method === 'discount' ? 'الخصم' : 'السداد'})
           </h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
-            حساب محاسبي للعنبر (ابتدائي + فواتير − تحصيل نقدي) وفق تسجيلات النظام.
+            حساب محاسبي للعنبر (ابتدائي + فواتير − تحصيل نقدي {payment.payment_method === 'discount' ? '− خصومات' : ''}) وفق تسجيلات النظام.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 text-sm">
             <div>
-              <p className="text-gray-500 dark:text-gray-400">رصيد العنبر قبل السداد</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                رصيد العنبر قبل {payment.payment_method === 'discount' ? 'الخصم' : 'السداد'}
+              </p>
               <p className="font-medium tabular-nums">{formatCurrency(barnBefore!)}</p>
               <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
                 {payment.barn_name?.trim() ||
@@ -183,7 +192,9 @@ export default function PaymentDetail() {
               </p>
             </div>
             <div>
-              <p className="text-gray-500 dark:text-gray-400">رصيد العنبر بعد السداد</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                رصيد العنبر بعد {payment.payment_method === 'discount' ? 'الخصم' : 'السداد'}
+              </p>
               <p className="font-medium tabular-nums">{formatCurrency(barnAfter!)}</p>
             </div>
           </div>

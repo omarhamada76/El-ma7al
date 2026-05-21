@@ -737,10 +737,6 @@ const handlers = {
     const expired = query.expired === 'true' || query.expired === '1'
     const showArchived = query.show_archived === 'true' || query.show_archived === '1'
     
-    console.log('[DEBUG] Products Filter Flags:', { 
-      lowStock, unpriced, expiring, expired, showArchived, 
-      warehouseId: warehouseIdOk, search: query.search 
-    })
     const list = await db.getProducts(
       query.search,
       query.category,
@@ -922,7 +918,14 @@ const handlers = {
   'POST /api/v1/products/:id/stock-adjustment': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const productId = parseInt(pathParts[1], 10)
-    await db.upsertProductStock(productId, body.warehouse_id, body.quantity_delta || 0)
+    const warehouseId = Number(body.warehouse_id)
+    const existingBatches = await db.getBatchesForProduct(productId, warehouseId, { includeEmpty: true })
+    if (Array.isArray(existingBatches) && existingBatches.length > 0) {
+      return send(res, 400, {
+        message: 'لا يمكن تعديل مخزون مباشر لمنتج لديه دُفعات. عدّل الكمية من الدُفعات.',
+      })
+    }
+    await db.upsertProductStock(productId, warehouseId, body.quantity_delta || 0)
     send(res, 204)
   },
 
@@ -1156,7 +1159,15 @@ const handlers = {
   'GET /api/v1/payments': async (req, res, _body, { query }) => {
     if (!requireAuth(req, res)) return
     const limit = Math.min(parseInt(query.limit, 10) || 50, 200)
-    const list = await db.getPayments(limit)
+    const clientId = query.client_id && query.client_id !== 'undefined' ? parseInt(query.client_id, 10) : undefined
+    const barnId = query.barn_id && query.barn_id !== 'undefined' ? parseInt(query.barn_id, 10) : undefined
+    const paymentMethod = query.payment_method || undefined
+    const list = await db.getPayments({
+      limit,
+      client_id: clientId && !isNaN(clientId) ? clientId : undefined,
+      barn_id: barnId && !isNaN(barnId) ? barnId : undefined,
+      payment_method: paymentMethod
+    })
     send(res, 200, { data: list, total: list.length })
   },
   'POST /api/v1/payments': async (req, res, body) => {

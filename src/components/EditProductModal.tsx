@@ -237,10 +237,13 @@ export default function EditProductModal({
         await seedInitialBulkStockForProduct(productId, { initial_batches: seedBatches })
       }
       queryClient.invalidateQueries({ queryKey: ['product', productIdKey] })
+      queryClient.invalidateQueries({ queryKey: ['product', productIdKey, 'stock'] })
       queryClient.invalidateQueries({ queryKey: ['product', productIdKey, 'batches'] })
       queryClient.invalidateQueries({ queryKey: ['product', productIdKey, 'batches', 'edit'] })
+      queryClient.invalidateQueries({ queryKey: ['product', productIdKey, 'bags'] })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       onProductSaved?.()
       onClose()
     } catch (err) {
@@ -651,6 +654,7 @@ function BatchesSection({
     queryClient.invalidateQueries({ queryKey: ['products', 'warehouse'] })
     queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
     queryClient.invalidateQueries({ queryKey: ['warehouse-batches'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   if (batches.length === 0) {
@@ -716,6 +720,8 @@ function BatchesSection({
               key={b.id}
               batch={b}
               productUnitBulk={isBulk}
+              defaultPurchasePrice={Number(product.purchase_price ?? 0)}
+              defaultSellingPrice={Number(product.selling_price ?? 0)}
               canManage={canManageBatches}
               isSuperAdmin={isSuperAdmin}
               onSaved={invalidate}
@@ -769,22 +775,34 @@ function BatchesSection({
 function BatchRow({
   batch,
   productUnitBulk,
+  defaultPurchasePrice,
+  defaultSellingPrice,
   canManage,
   isSuperAdmin,
   onSaved,
 }: {
   batch: ProductBatch
   productUnitBulk: boolean
+  defaultPurchasePrice: number
+  defaultSellingPrice: number
   canManage: boolean
   isSuperAdmin: boolean
   onSaved: () => void
 }) {
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const effectivePurchasePrice =
+    batch.purchase_price != null && Number(batch.purchase_price) > 0
+      ? Number(batch.purchase_price)
+      : Number(defaultPurchasePrice || 0)
+  const effectiveSellingPrice =
+    batch.selling_price != null && Number(batch.selling_price) > 0
+      ? Number(batch.selling_price)
+      : Number(defaultSellingPrice || 0)
   const [expiryInput, setExpiryInput] = useState(() => expiryToInputValue(batch.expiry_date))
   const [qty, setQty] = useState(String(batch.quantity ?? 0))
   const [kgRem, setKgRem] = useState(String(batch.kg_remaining ?? 0))
-  const [pp, setPp] = useState(batch.purchase_price != null ? String(batch.purchase_price) : '')
-  const [sp, setSp] = useState(batch.selling_price != null ? String(batch.selling_price) : '')
+  const [pp, setPp] = useState(effectivePurchasePrice > 0 ? String(effectivePurchasePrice) : '')
+  const [sp, setSp] = useState(effectiveSellingPrice > 0 ? String(effectiveSellingPrice) : '')
   const [saving, setSaving] = useState(false)
   const [rowErr, setRowErr] = useState('')
 
@@ -792,10 +810,10 @@ function BatchRow({
     setExpiryInput(expiryToInputValue(batch.expiry_date))
     setQty(String(batch.quantity ?? 0))
     setKgRem(String(batch.kg_remaining ?? 0))
-    setPp(batch.purchase_price != null ? String(batch.purchase_price) : '')
-    setSp(batch.selling_price != null ? String(batch.selling_price) : '')
+    setPp(effectivePurchasePrice > 0 ? String(effectivePurchasePrice) : '')
+    setSp(effectiveSellingPrice > 0 ? String(effectiveSellingPrice) : '')
     setRowErr('')
-  }, [batch])
+  }, [batch, effectivePurchasePrice, effectiveSellingPrice])
 
   const isExpired =
     batch.expiry_date &&
@@ -897,8 +915,8 @@ function BatchRow({
     inputValueToExpiry(expiryInput) !== inputValueToExpiry(originalExpiryInput)
   const qtyChanged = Math.floor(Number(qty)) !== Math.floor(Number(batch.quantity ?? 0))
   const kgChanged = Number(kgRem) !== Number(batch.kg_remaining ?? 0)
-  const ppChanged = (pp === '' ? null : Number(pp)) !== (batch.purchase_price == null ? null : Number(batch.purchase_price))
-  const spChanged = (sp === '' ? null : Number(sp)) !== (batch.selling_price == null ? null : Number(batch.selling_price))
+  const ppChanged = (pp === '' ? null : Number(pp)) !== (effectivePurchasePrice > 0 ? effectivePurchasePrice : null)
+  const spChanged = (sp === '' ? null : Number(sp)) !== (effectiveSellingPrice > 0 ? effectiveSellingPrice : null)
   const hasDirtyChanges = expiryChanged || qtyChanged || kgChanged || ppChanged || spChanged
 
   return (
@@ -979,7 +997,7 @@ function BatchRow({
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
-              batch.purchase_price != null ? formatCurrency(batch.purchase_price) : '—'
+              effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
             )}
           </td>
           <td className="py-2 px-2 align-top">
@@ -996,7 +1014,7 @@ function BatchRow({
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
-              batch.selling_price != null ? formatCurrency(batch.selling_price) : '—'
+              effectiveSellingPrice > 0 ? formatCurrency(effectiveSellingPrice) : '—'
             )}
           </td>
         </>
@@ -1043,7 +1061,7 @@ function BatchRow({
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
-              batch.purchase_price != null ? formatCurrency(batch.purchase_price) : '—'
+              effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
             )}
           </td>
           <td className="py-2 px-2 align-top">
@@ -1060,7 +1078,7 @@ function BatchRow({
                 className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
               />
             ) : (
-              batch.selling_price != null ? formatCurrency(batch.selling_price) : '—'
+              effectiveSellingPrice > 0 ? formatCurrency(effectiveSellingPrice) : '—'
             )}
           </td>
         </>

@@ -26,6 +26,7 @@ import InvoiceDetail from '@/pages/InvoiceDetail'
 import PaymentNew from '@/pages/PaymentNew'
 import PaymentDetail from '@/pages/PaymentDetail'
 import Payments from '@/pages/Payments'
+import Discounts from '@/pages/Discounts'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Users from '@/pages/Users'
@@ -133,6 +134,7 @@ function App() {
         <Route path="/payments/new" element={<PaymentNew />} />
         <Route path="/payments/:id" element={<PaymentDetail />} />
         <Route path="/payments" element={<Payments />} />
+        <Route path="/discounts" element={<Discounts />} />
         <Route
           path="/reports"
           element={

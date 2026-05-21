@@ -408,7 +408,11 @@ export async function getProducts(
           )
       ), 0) AS warehouse_stock`;
     } else {
-      stockSelect = `COALESCE(pws.quantity, 0) AS warehouse_stock`;
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id AND pb.warehouse_id = $1
+      ), 0) AS warehouse_stock`;
     }
   } else {
     if (expiring) {
@@ -454,6 +458,7 @@ export async function getProducts(
           ${batchTotalQtySelect}
         FROM product_batches pb
         WHERE pb.product_id = p.id
+          AND pb.warehouse_id = $1
       ) ba ON TRUE
       LEFT JOIN LATERAL (
         SELECT
@@ -520,8 +525,6 @@ export async function getProducts(
     `,
     params
   )
-  console.log('[DEBUG] First row from getProducts query:', q.rows[0] ? Object.keys(q.rows[0]) : 'no rows');
-  if (q.rows[0]) console.log('[DEBUG] image_url in first row:', q.rows[0].image_url);
 
   return q.rows.map((r) => ({
     ...r,
@@ -1326,7 +1329,13 @@ export async function getClients(search, pinned, limit = 50, sort) {
   if (pinned === true || pinned === 'true') {
     sql += ' AND c.pinned = true'
   }
-  sql += sort === 'debt_desc' ? ' ORDER BY balance DESC, c.id DESC' : ' ORDER BY c.id DESC'
+  sql += `
+    ORDER BY
+      CASE WHEN COALESCE(c.pinned, false) THEN 0 ELSE 1 END,
+      c.pinned_at ASC NULLS LAST,
+      balance DESC,
+      c.id DESC
+  `
   sql += ` LIMIT $${i}`
   params.push(Math.min(Number(limit) || 50, 500))
   const r = await pool.query(sql, params)
@@ -1508,19 +1517,47 @@ export async function deleteBarn(id) {
   await pool.query('DELETE FROM barns WHERE id = $1', [id])
 }
 
-export async function getPayments(limit = 50) {
-  const r = await pool.query(
-    `
-      SELECT p.*, c.name AS client_name, b.name AS barn_name
-      FROM payments p
-      LEFT JOIN clients c ON c.id = p.client_id
-      LEFT JOIN barns b ON b.id = p.barn_id
-      WHERE p.invoice_id IS NULL
-      ORDER BY p.id DESC
-      LIMIT $1
-    `,
-    [Math.min(Number(limit) || 50, 200)]
-  )
+export async function getPayments(options = {}) {
+  let limit = 50
+  let clientId = undefined
+  let barnId = undefined
+  let paymentMethod = undefined
+
+  if (typeof options === 'number') {
+    limit = options
+  } else if (options && typeof options === 'object') {
+    limit = options.limit ?? 50
+    clientId = options.client_id
+    barnId = options.barn_id
+    paymentMethod = options.payment_method
+  }
+
+  const params = []
+  let paramIndex = 1
+  let sql = `
+    SELECT p.*, c.name AS client_name, b.name AS barn_name
+    FROM payments p
+    LEFT JOIN clients c ON c.id = p.client_id
+    LEFT JOIN barns b ON b.id = p.barn_id
+    WHERE p.invoice_id IS NULL
+  `
+  if (clientId !== undefined && clientId !== null) {
+    sql += ` AND p.client_id = $${paramIndex++}`
+    params.push(clientId)
+  }
+  if (barnId !== undefined && barnId !== null) {
+    sql += ` AND p.barn_id = $${paramIndex++}`
+    params.push(barnId)
+  }
+  if (paymentMethod !== undefined && paymentMethod !== null) {
+    sql += ` AND p.payment_method = $${paramIndex++}`
+    params.push(paymentMethod)
+  }
+
+  sql += ` ORDER BY p.id DESC LIMIT $${paramIndex++}`
+  params.push(Math.min(Number(limit) || 50, 200))
+
+  const r = await pool.query(sql, params)
   return r.rows
 }
 
@@ -2623,43 +2660,44 @@ export async function getInvoices(limitOrOpts = 50) {
   const params = []
   let i = 1
   let sql = `
-      SELECT *
+      SELECT invoices.*, b.name AS barn_name
       FROM invoices
-      WHERE COALESCE(invoice_lifecycle, 'active') != 'cancelled'
+      LEFT JOIN barns b ON b.id = invoices.barn_id
+      WHERE COALESCE(invoices.invoice_lifecycle, 'active') != 'cancelled'
   `
   if (opts.unpaid_only) {
-    sql += ' AND COALESCE(remaining_amount, 0) > 0'
+    sql += ' AND COALESCE(invoices.remaining_amount, 0) > 0'
   }
   if (opts.payment_method) {
     const pm = String(opts.payment_method)
     if (pm === 'آجل' || pm === 'credit' || pm === 'deferred') {
-      sql += ` AND COALESCE(payment_method, '') IN ('آجل', 'credit', 'deferred')`
+      sql += ` AND COALESCE(invoices.payment_method, '') IN ('آجل', 'credit', 'deferred')`
     } else {
-      sql += ` AND payment_method = $${i++}`
+      sql += ` AND invoices.payment_method = $${i++}`
       params.push(pm)
     }
   }
   if (opts.warehouse_id != null && Number.isFinite(Number(opts.warehouse_id))) {
-    sql += ` AND warehouse_id = $${i++}`
+    sql += ` AND invoices.warehouse_id = $${i++}`
     params.push(Number(opts.warehouse_id))
   }
   if (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.from).slice(0, 10))) {
-    sql += ` AND created_at::date >= $${i++}::date`
+    sql += ` AND invoices.created_at::date >= $${i++}::date`
     params.push(String(opts.from).slice(0, 10))
   }
   if (opts.to && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.to).slice(0, 10))) {
-    sql += ` AND created_at::date <= $${i++}::date`
+    sql += ` AND invoices.created_at::date <= $${i++}::date`
     params.push(String(opts.to).slice(0, 10))
   }
   if (opts.client_id != null && Number.isFinite(Number(opts.client_id))) {
-    sql += ` AND client_id = $${i++}`
+    sql += ` AND invoices.client_id = $${i++}`
     params.push(Number(opts.client_id))
   }
   if (opts.barn_id != null && Number.isFinite(Number(opts.barn_id))) {
-    sql += ` AND barn_id = $${i++}`
+    sql += ` AND invoices.barn_id = $${i++}`
     params.push(Number(opts.barn_id))
   }
-  sql += ` ORDER BY id DESC LIMIT $${i}`
+  sql += ` ORDER BY invoices.id DESC LIMIT $${i}`
   params.push(limit)
   const r = await pool.query(sql, params)
   const out = []
@@ -4325,73 +4363,196 @@ export async function createInventoryTransfer(data) {
         throw new Error(`الكمية المطلوبة (${qty}) للمنتج «${name}» أكبر من المتاح (${available})`)
       }
 
-      // ── Deduct from source batches (LIFO: newest batch first by id DESC) ──
-      const batchRes = await client.query(
-        `SELECT * FROM product_batches
-         WHERE product_id = $1 AND warehouse_id = $2 AND COALESCE(quantity, 0) > 0
-         ORDER BY id DESC`,
-        [pid, fromWh]
-      )
-      let remaining = qty
-      for (const batch of batchRes.rows) {
-        if (remaining <= 0) break
-        const batchQty = Number(batch.quantity ?? 0)
-        const take = Math.min(remaining, batchQty)
-        if (take <= 0) continue
+      // Fetch product unit_type
+      const pRes = await client.query('SELECT name, unit_type FROM products WHERE id = $1', [pid])
+      const product = pRes.rows[0]
+      if (!product) {
+        throw new Error(`المنتج #${pid} غير موجود`)
+      }
+      const unitType = product.unit_type || 'piece'
 
-        // Subtract from source batch
-        await client.query(
-          'UPDATE product_batches SET quantity = GREATEST(0, quantity - $1), updated_at = NOW() WHERE id = $2',
-          [take, batch.id]
+      if (unitType === 'bulk') {
+        // Fetch active bag instances in source warehouse (FEFO)
+        const bagsRes = await client.query(
+          `SELECT bi.id AS bag_id, bi.batch_id, bi.kg_remaining, bi.expiry_date, bi.kg_total,
+                  pb.purchase_price, pb.selling_price
+           FROM bag_instances bi
+           JOIN product_batches pb ON pb.id = bi.batch_id
+           WHERE bi.product_id = $1
+             AND bi.warehouse_id = $2
+             AND bi.status IN ('open', 'sealed')
+             AND COALESCE(bi.kg_remaining, 0) > 0
+           ORDER BY bi.expiry_date ASC, bi.id ASC`,
+          [pid, fromWh]
         )
+        const totalAvail = bagsRes.rows.reduce((s, r) => s + Number(r.kg_remaining ?? 0), 0)
+        if (totalAvail + 0.0001 < qty) {
+          throw new Error(`الوزن المتاح غير كافٍ للمنتج «${product.name}» (مطلوب: ${qty} كيلو، متاح: ${totalAvail} كيلو)`)
+        }
 
-        // Create or update matching batch in target warehouse
-        const existingTarget = await client.query(
-          `SELECT id FROM product_batches
-           WHERE product_id = $1 AND warehouse_id = $2 AND expiry_date = $3
-             AND COALESCE(purchase_price, 0) = COALESCE($4::numeric, 0)
-             AND COALESCE(selling_price, 0) = COALESCE($5::numeric, 0)
-           LIMIT 1`,
-          [pid, toWh, batch.expiry_date, batch.purchase_price, batch.selling_price]
-        )
+        let remaining = qty
+        for (const bag of bagsRes.rows) {
+          if (remaining <= 0.0001) break
+          const bagKg = Number(bag.kg_remaining ?? 0)
+          const take = Math.min(remaining, bagKg)
+          if (take <= 0) continue
 
-        if (existingTarget.rows.length > 0) {
+          const isFullyEmpty = (bagKg - take <= 0.001)
+
+          // A. Deduct from source bag instance
           await client.query(
-            'UPDATE product_batches SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2',
-            [take, existingTarget.rows[0].id]
+            `UPDATE bag_instances
+             SET kg_remaining = GREATEST(0, kg_remaining - $1),
+                 status = CASE WHEN kg_remaining - $1 <= 0.001 THEN 'empty' ELSE status END
+             WHERE id = $2`,
+            [take, bag.bag_id]
           )
-        } else {
+
+          // B. Deduct from source product_batch
           await client.query(
-            `INSERT INTO product_batches
-             (product_id, warehouse_id, expiry_date, quantity, purchase_price, selling_price,
-              unit_type, bag_count, kg_per_bag, kg_remaining, source, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, NULL, 'transfer', NOW(), NOW())`,
+            `UPDATE product_batches
+             SET kg_remaining = GREATEST(0, COALESCE(kg_remaining, 0) - $1),
+                 bag_count = CASE WHEN $3 = true THEN GREATEST(0, COALESCE(bag_count, 0) - 1) ELSE bag_count END,
+                 quantity = CASE WHEN $3 = true THEN GREATEST(0, COALESCE(quantity, 0) - 1) ELSE quantity END,
+                 updated_at = NOW()
+             WHERE id = $2`,
+            [take, bag.batch_id, isFullyEmpty]
+          )
+
+          // C. Create or update matching batch in target warehouse
+          const existingTarget = await client.query(
+            `SELECT id FROM product_batches
+             WHERE product_id = $1 AND warehouse_id = $2 AND expiry_date = $3
+               AND COALESCE(purchase_price, 0) = COALESCE($4::numeric, 0)
+               AND COALESCE(selling_price, 0) = COALESCE($5::numeric, 0)
+             LIMIT 1`,
+            [pid, toWh, bag.expiry_date, bag.purchase_price, bag.selling_price]
+          )
+
+          let targetBatchId
+          if (existingTarget.rows.length > 0) {
+            targetBatchId = existingTarget.rows[0].id
+            await client.query(
+              `UPDATE product_batches
+               SET quantity = quantity + 1,
+                   bag_count = bag_count + 1,
+                   kg_remaining = COALESCE(kg_remaining, 0) + $1,
+                   updated_at = NOW()
+               WHERE id = $2`,
+              [take, targetBatchId]
+            )
+          } else {
+            const insBatch = await client.query(
+              `INSERT INTO product_batches
+               (product_id, warehouse_id, expiry_date, quantity, purchase_price, selling_price,
+                unit_type, bag_count, kg_per_bag, kg_remaining, source, created_at, updated_at)
+               VALUES ($1, $2, $3, 1, $4, $5, 'bulk', 1, $6, $7, 'transfer', NOW(), NOW())
+               RETURNING id`,
+              [
+                pid, toWh, bag.expiry_date,
+                bag.purchase_price ?? null, bag.selling_price ?? null,
+                bag.kg_total ?? take, take
+              ]
+            )
+            targetBatchId = insBatch.rows[0].id
+          }
+
+          // D. Create bag instance in target warehouse
+          const currentCountRow = await client.query(
+            'SELECT COUNT(*)::int AS c FROM bag_instances WHERE batch_id = $1',
+            [targetBatchId]
+          )
+          const currentCount = Number(currentCountRow.rows[0]?.c ?? 0)
+
+          await client.query(
+            `INSERT INTO bag_instances
+             (batch_id, product_id, warehouse_id, bag_number, kg_total, kg_remaining, status, expiry_date, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'sealed', $7, NOW())`,
             [
-              pid, toWh, batch.expiry_date, take,
-              batch.purchase_price ?? null, batch.selling_price ?? null,
-              batch.unit_type ?? 'piece', batch.kg_per_bag ?? null,
+              targetBatchId, pid, toWh, currentCount + 1,
+              take, take,
+              bag.expiry_date
             ]
           )
+
+          remaining -= take
         }
-        remaining -= take
+
+        // Auto-open target bag if needed
+        const openTargetBag = await client.query(
+          "SELECT id FROM bag_instances WHERE product_id = $1 AND warehouse_id = $2 AND status = 'open' LIMIT 1",
+          [pid, toWh]
+        )
+        if (!openTargetBag.rows[0]) {
+          await client.query(
+            `UPDATE bag_instances
+             SET status = 'open', opened_at = NOW()
+             WHERE id = (
+               SELECT id FROM bag_instances
+               WHERE product_id = $1 AND warehouse_id = $2 AND status = 'sealed'
+               ORDER BY expiry_date ASC NULLS LAST, id ASC
+               LIMIT 1
+             )`,
+            [pid, toWh]
+          )
+        }
+
+      } else {
+        // Piece product transfer logic (LIFO: newest batch first by id DESC)
+        const batchRes = await client.query(
+          `SELECT * FROM product_batches
+           WHERE product_id = $1 AND warehouse_id = $2 AND COALESCE(quantity, 0) > 0
+           ORDER BY id DESC`,
+          [pid, fromWh]
+        )
+        let remaining = qty
+        for (const batch of batchRes.rows) {
+          if (remaining <= 0) break
+          const batchQty = Number(batch.quantity ?? 0)
+          const take = Math.min(remaining, batchQty)
+          if (take <= 0) continue
+
+          // Subtract from source batch
+          await client.query(
+            'UPDATE product_batches SET quantity = GREATEST(0, quantity - $1), updated_at = NOW() WHERE id = $2',
+            [take, batch.id]
+          )
+
+          // Create or update matching batch in target warehouse
+          const existingTarget = await client.query(
+            `SELECT id FROM product_batches
+             WHERE product_id = $1 AND warehouse_id = $2 AND expiry_date = $3
+               AND COALESCE(purchase_price, 0) = COALESCE($4::numeric, 0)
+               AND COALESCE(selling_price, 0) = COALESCE($5::numeric, 0)
+             LIMIT 1`,
+            [pid, toWh, batch.expiry_date, batch.purchase_price, batch.selling_price]
+          )
+
+          if (existingTarget.rows.length > 0) {
+            await client.query(
+              'UPDATE product_batches SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2',
+              [take, existingTarget.rows[0].id]
+            )
+          } else {
+            await client.query(
+              `INSERT INTO product_batches
+               (product_id, warehouse_id, expiry_date, quantity, purchase_price, selling_price,
+                unit_type, bag_count, kg_per_bag, kg_remaining, source, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, NULL, 'transfer', NOW(), NOW())`,
+              [
+                pid, toWh, batch.expiry_date, take,
+                batch.purchase_price ?? null, batch.selling_price ?? null,
+                'piece', batch.kg_per_bag ?? null,
+              ]
+            )
+          }
+          remaining -= take
+        }
       }
 
-      // ── Update product_warehouse_stock for both warehouses ──
-      // Subtract from source
-      await client.query(
-        `UPDATE product_warehouse_stock
-         SET quantity = GREATEST(0, quantity - $1), updated_at = NOW()
-         WHERE product_id = $2 AND warehouse_id = $3`,
-        [qty, pid, fromWh]
-      )
-      // Add to target (upsert)
-      await client.query(
-        `INSERT INTO product_warehouse_stock (product_id, warehouse_id, quantity, updated_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (product_id, warehouse_id) DO UPDATE
-         SET quantity = product_warehouse_stock.quantity + EXCLUDED.quantity, updated_at = NOW()`,
-        [pid, toWh, qty]
-      )
+      // Sync warehouse stock cache for both warehouses
+      await syncWarehouseStockFromBatchesWithClient(client, pid, fromWh)
+      await syncWarehouseStockFromBatchesWithClient(client, pid, toWh)
     }
 
     // ── Persist transfer log ──

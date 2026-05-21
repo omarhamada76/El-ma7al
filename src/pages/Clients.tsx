@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -12,6 +12,8 @@ import {
   Trash2,
   FileSpreadsheet,
   MoreVertical,
+  CreditCard,
+  FileText,
 } from 'lucide-react'
 import { getClients, createClient, updateClient, deleteClient, togglePin } from '@/api/clients'
 import type { Client } from '@/types/api'
@@ -20,21 +22,21 @@ import { cn } from '@/lib/utils'
 import AddClientModal from '@/components/AddClientModal'
 import SuccessOverlay from '@/components/SuccessOverlay'
 import ContextMenu from '@/components/ContextMenu'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
 
 export default function Clients() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const showFinancials = canViewFinancials(useAuthStore((s) => s.user?.role))
   const [search, setSearch] = useState('')
-  const [sortByDebt, setSortByDebt] = useState(() => searchParams.get('sort') === 'debt_desc')
   const [pinnedFilter, setPinnedFilter] = useState<boolean | undefined>(undefined)
   const [addOpen, setAddOpen] = useState(false)
   const [editClient, setEditClient] = useState<Client | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; client: Client } | null>(null)
   const [actionsMenu, setActionsMenu] = useState<{ x: number; y: number; client: Client } | null>(null)
   const [clientCelebrate, setClientCelebrate] = useState<{ title: string; subtitle?: string } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Client | null>(null)
   const queryClient = useQueryClient()
   const createMutation = useMutation({
     mutationFn: createClient,
@@ -57,6 +59,7 @@ export default function Clients() {
       queryClient.invalidateQueries({ queryKey: ['client', String(id)] })
       setContextMenu(null)
       setActionsMenu(null)
+      setConfirmDelete(null)
     },
   })
   const pinMutation = useMutation({
@@ -67,18 +70,13 @@ export default function Clients() {
       setActionsMenu(null)
     },
   })
-  useEffect(() => {
-    setSortByDebt(searchParams.get('sort') === 'debt_desc')
-  }, [searchParams])
-
   const { data, isLoading } = useQuery({
-    queryKey: ['clients', search, pinnedFilter, sortByDebt],
+    queryKey: ['clients', search, pinnedFilter],
     queryFn: () =>
       getClients({
         search: normalizeSearchText(search) || undefined,
         pinned: pinnedFilter,
         limit: 50,
-        sort: sortByDebt ? 'debt_desc' : undefined,
       }),
   })
 
@@ -94,6 +92,16 @@ export default function Clients() {
         subtitle={clientCelebrate?.subtitle}
         durationMs={1500}
         onComplete={() => setClientCelebrate(null)}
+      />
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="حذف العميل"
+        message={`هل أنت متأكد من حذف العميل "${confirmDelete?.name ?? ''}"؟ لا يمكن التراجع عن هذا الإجراء.`}
+        confirmLabel="حذف"
+        variant="danger"
+        loading={deleteMutation.isPending}
+        onConfirm={() => confirmDelete && deleteMutation.mutate(confirmDelete.id)}
+        onCancel={() => setConfirmDelete(null)}
       />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-xl sm:text-2xl font-bold">العملاء</h1>
@@ -162,27 +170,6 @@ export default function Clients() {
           >
             <Pin className="w-4 h-4" /> المثبتون
           </button>
-          {showFinancials && (
-            <button
-              type="button"
-              onClick={() => {
-                const next = !sortByDebt
-                setSortByDebt(next)
-                const p = new URLSearchParams(searchParams)
-                if (next) p.set('sort', 'debt_desc')
-                else p.delete('sort')
-                setSearchParams(p, { replace: true })
-              }}
-              className={cn(
-                'px-3 py-2 rounded-lg text-sm font-medium',
-                sortByDebt
-                  ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
-              )}
-            >
-              الأعلى ديناً
-            </button>
-          )}
         </div>
       </div>
 
@@ -203,9 +190,9 @@ export default function Clients() {
         ) : (
           <ul className="divide-y divide-gray-200 dark:divide-gray-700">
             {clients.map((c) => (
-              <li key={c.id}>
+                <li key={c.id}>
                 <div
-                  className="flex flex-wrap items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                  className="flex flex-wrap items-center gap-3 p-4 hover:bg-gray-50/80 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
                   onClick={(e) => {
                     const el = e.target as HTMLElement
                     if (el.closest('a, button')) return
@@ -277,18 +264,45 @@ export default function Clients() {
                         <span className="text-sm font-medium tabular-nums">
                           {formatCurrency(c.balance ?? c.initial_debt)}
                         </span>
-                        {(c.balance ?? 0) > 0 && (
-                          <span
-                            className={cn(
-                              'text-xs px-2 py-0.5 rounded-full font-medium shrink-0',
-                              (c.balance ?? 0) >= debtAlertThreshold
-                                ? 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-200'
-                                : 'bg-amber-100 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200'
-                            )}
-                          >
-                            دين
+                        {/* Color-coded debt status chip */}
+                        {(c.balance ?? 0) <= 0 ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 shrink-0">
+                            صافر
+                          </span>
+                        ) : (c.balance ?? 0) >= debtAlertThreshold ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300 shrink-0">
+                            دين كبير
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 shrink-0">
+                            مديون
                           </span>
                         )}
+                        {/* Quick action buttons */}
+                        <button
+                          type="button"
+                          title="سداد سريع"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            navigate(`/payments/new?client_id=${c.id}`)
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-primary-50 dark:bg-primary-950/30 text-primary-700 dark:text-primary-300 text-xs font-semibold hover:bg-primary-100 dark:hover:bg-primary-900/40 transition-colors border border-primary-200/60 dark:border-primary-800/40"
+                        >
+                          <CreditCard className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">سداد</span>
+                        </button>
+                        <button
+                          type="button"
+                          title="فاتورة جديدة"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            navigate(`/invoices/new?client_id=${c.id}`)
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors border border-emerald-200/60 dark:border-emerald-800/40"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">فاتورة</span>
+                        </button>
                       </>
                     )}
                     <ArrowLeft className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
@@ -330,11 +344,7 @@ export default function Clients() {
                     label: 'حذف',
                     icon: <Trash2 className="w-4 h-4" />,
                     danger: true,
-                    onClick: () => {
-                      if (window.confirm('هل أنت متأكد من حذف هذا العميل؟')) {
-                        deleteMutation.mutate(contextMenu.client.id)
-                      }
-                    },
+                    onClick: () => setConfirmDelete(contextMenu.client),
                   },
                 ]
               : []
@@ -367,11 +377,7 @@ export default function Clients() {
                     label: 'حذف',
                     icon: <Trash2 className="w-4 h-4" />,
                     danger: true,
-                    onClick: () => {
-                      if (window.confirm('هل أنت متأكد من حذف هذا العميل؟')) {
-                        deleteMutation.mutate(actionsMenu.client.id)
-                      }
-                    },
+                    onClick: () => setConfirmDelete(actionsMenu.client),
                   },
                 ]
               : []

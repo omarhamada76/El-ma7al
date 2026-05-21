@@ -108,15 +108,32 @@ export default function ProductDetail() {
 
 
 
-  const filteredStock = useMemo(
-    () => stock.filter((s) => Number(s.warehouse_id) === 1 && s.quantity > 0),
-    [stock]
-  )
-
   const filteredBatches = useMemo(
     () => batches.filter((b) => Number(b.warehouse_id) === 1 && (product?.unit_type === 'bulk' ? (b.kg_remaining ?? 0) > 0 : (b.quantity ?? 0) > 0)),
     [batches, product?.unit_type]
   )
+
+  const filteredStock = useMemo(() => {
+    // Prefer batches as the source of truth so warehouse stock cards
+    // reflect edits to batch quantities immediately and consistently.
+    if (filteredBatches.length > 0) {
+      const byWarehouse = new Map<number, number>()
+      for (const b of filteredBatches) {
+        const qty = product?.unit_type === 'bulk' ? Number(b.kg_remaining ?? 0) : Number(b.quantity ?? 0)
+        if (!Number.isFinite(qty) || qty <= 0) continue
+        byWarehouse.set(b.warehouse_id, (byWarehouse.get(b.warehouse_id) ?? 0) + qty)
+      }
+      return [...byWarehouse.entries()]
+        .filter(([, quantity]) => quantity > 0)
+        .map(([warehouse_id, quantity]) => ({
+          product_id: Number(id),
+          warehouse_id,
+          quantity,
+          updated_at: '',
+        }))
+    }
+    return stock.filter((s) => Number(s.warehouse_id) === 1 && s.quantity > 0)
+  }, [filteredBatches, id, product?.unit_type, stock])
 
   const filteredBags = useMemo(
     () => bags.filter((b) => Number(b.warehouse_id) === 1 && b.kg_remaining > 0),
@@ -222,7 +239,17 @@ export default function ProductDetail() {
       </div>
       <EditProductModal
         open={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => {
+          setEditOpen(false)
+          // Always refetch stock/batches/bags after closing the edit modal
+          // so that batch-quantity changes are reflected in the inventory display
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'bags'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id] })
+          queryClient.invalidateQueries({ queryKey: ['products'] })
+          queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        }}
         product={product}
         categoryOptions={categoryOptions}
         warehouseOptions={warehouses.map((w) => ({ id: w.id, name_ar: w.name_ar }))}
@@ -230,6 +257,11 @@ export default function ProductDetail() {
         isSuperAdmin={isSuperAdmin}
         onProductSaved={() => {
           queryClient.invalidateQueries({ queryKey: ['product', id] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'bags'] })
+          queryClient.invalidateQueries({ queryKey: ['products'] })
+          queryClient.invalidateQueries({ queryKey: ['dashboard'] })
         }}
       />
       <div className="flex flex-col sm:flex-row gap-5 sm:gap-6 sm:items-start">
@@ -623,7 +655,10 @@ export default function ProductDetail() {
           currentQuantity={stockEdit.currentQuantity}
           onSuccess={() => {
             queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
+            queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
+            queryClient.invalidateQueries({ queryKey: ['products'] })
             queryClient.invalidateQueries({ queryKey: ['warehouse-stock', stockEdit.warehouseId] })
+            queryClient.invalidateQueries({ queryKey: ['dashboard'] })
           }}
         />
       )}

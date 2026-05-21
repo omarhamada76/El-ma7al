@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth'
 import { canCancelFullInvoice } from '@/lib/roles'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import InvoiceReceiptPrint from '@/components/InvoiceReceiptPrint'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 function formatBatchExpiry(d: string | null | undefined) {
   if (!d || d === '9999-12-31') return 'بدون تاريخ'
@@ -40,6 +41,8 @@ export default function InvoiceDetail() {
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null)
   const [returnModal, setReturnModal] = useState<InvoiceItem | null>(null)
   const [returnQtyInput, setReturnQtyInput] = useState('')
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false)
+  const [returnConfirmOpen, setReturnConfirmOpen] = useState(false)
 
   useEffect(() => {
     if (!toast) return
@@ -175,13 +178,11 @@ export default function InvoiceDetail() {
   })
 
   function handleCancelInvoice() {
-    if (
-      !window.confirm(
-        'إلغاء هذه الفاتورة سيعيد جميع المنتجات إلى المخزن ويلغي السداد المرتبط بها (خصم نقدي من الخزنة عند الدفع نقداً). هل أنت متأكد؟'
-      )
-    ) {
-      return
-    }
+    setCancelConfirmOpen(true)
+  }
+
+  function executeCancelInvoice() {
+    setCancelConfirmOpen(false)
     cancelMutation.mutate()
   }
 
@@ -198,19 +199,19 @@ export default function InvoiceDetail() {
       setToast({ type: 'warning', message: 'أدخل كمية إرجاع صالحة' })
       return
     }
+    setReturnConfirmOpen(true)
+  }
+
+  function executeReturnLine() {
+    if (!returnModal || !id) return
+    const maxQ = Number(returnModal.quantity) || 0
+    const q = parseFloat(returnQtyInput.replace(',', '.'))
+    if (!Number.isFinite(q) || q <= 0) return
     const isFull = q >= maxQ - 0.0001
-    const sellPrice = returnModal.unit_selling_price ?? returnModal.unit_price
-    const expiryLabel = formatBatchExpiry(returnModal.batch_expiry_date)
-    if (
-      !window.confirm(
-        `هل تريد إزالة ${isFull ? 'كامل' : 'جزء من'} ${returnModal.product_name} من الفاتورة؟\nسيتم إعادة ${q} ${returnModal.product_unit_type === 'bulk' ? 'كيلو' : 'وحدة'} إلى المخزن (دفعة: ${expiryLabel} — ${formatCurrency(sellPrice)})`
-      )
-    ) {
-      return
-    }
     const isBulk = returnModal.product_unit_type === 'bulk'
     const label = isBulk ? 'كيلو' : 'وحدة'
     const place = isBulk ? 'الشكارة' : 'المخزن'
+    setReturnConfirmOpen(false)
     if (isFull) {
       const toastMsg = `تمت إعادة ${maxQ} ${label} من ${returnModal.product_name} إلى ${place} بنجاح`
       removeItemMutation.mutate(returnModal.id, {
@@ -271,6 +272,26 @@ export default function InvoiceDetail() {
       {toast && (
         <FeedbackBanner type={toast.type} message={toast.message} fixed />
       )}
+      <ConfirmDialog
+        open={cancelConfirmOpen}
+        title="إلغاء الفاتورة"
+        message="إلغاء هذه الفاتورة سيُعيد جميع المنتجات إلى المخزن ويُلغي السداد المرتبط بها (خصم نقدي من الخزنة عند الدفع نقداً). لا يمكن التراجع عن هذا الإجراء."
+        confirmLabel="تأكيد الإلغاء"
+        variant="danger"
+        loading={cancelMutation.isPending}
+        onConfirm={executeCancelInvoice}
+        onCancel={() => setCancelConfirmOpen(false)}
+      />
+      <ConfirmDialog
+        open={returnConfirmOpen}
+        title={`إرجاع صنف: ${returnModal?.product_name ?? ''}`}
+        message={`سيتم إعادة ${returnQtyInput} ${returnModal?.product_unit_type === 'bulk' ? 'كيلو' : 'وحدة'} إلى المخزن. هل أنت متأكد؟`}
+        confirmLabel="تأكيد الإرجاع"
+        variant="warning"
+        loading={removeItemMutation.isPending || partialReturnMutation.isPending}
+        onConfirm={executeReturnLine}
+        onCancel={() => setReturnConfirmOpen(false)}
+      />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, CreditCard, Pencil, Trash2 } from 'lucide-react'
+import { Plus, CreditCard, Pencil, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { getSupplier, getSupplierBalance, getSupplierPurchasesWithItems, getSupplierPayments, updateSupplier, deleteSupplier } from '@/api/suppliers'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import AddSupplierModal from '@/components/AddSupplierModal'
@@ -11,6 +11,7 @@ export default function SupplierDetail() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [editOpen, setEditOpen] = useState(false)
+  const [expandedPurchases, setExpandedPurchases] = useState<Record<number, boolean>>({})
   const { data: supplier, isLoading } = useQuery({
     queryKey: ['supplier', id],
     queryFn: () => getSupplier(id!),
@@ -54,6 +55,9 @@ export default function SupplierDetail() {
   })
   const handleDeleteSupplier = () => {
     if (window.confirm('هل أنت متأكد من حذف هذا المورد؟')) deleteSupplierMutation.mutate()
+  }
+  const togglePurchaseDetails = (purchaseId: number) => {
+    setExpandedPurchases((prev) => ({ ...prev, [purchaseId]: !prev[purchaseId] }))
   }
 
   if (!id) return null
@@ -144,6 +148,7 @@ export default function SupplierDetail() {
                 <table className="w-full text-sm text-right">
                   <thead className="text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700 uppercase">
                     <tr>
+                      <th className="px-4 py-3 font-medium text-gray-900 dark:text-white text-center w-16">تفاصيل</th>
                       <th className="px-4 py-3 font-medium text-gray-900 dark:text-white">التاريخ</th>
                       <th className="px-4 py-3 font-medium text-gray-900 dark:text-white text-center">الأصناف</th>
                       <th className="px-4 py-3 font-medium text-gray-900 dark:text-white text-left">الإجمالي</th>
@@ -153,6 +158,20 @@ export default function SupplierDetail() {
                     {purchases.map((p) => (
                       <React.Fragment key={p.id}>
                         <tr className="hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              type="button"
+                              onClick={() => togglePurchaseDetails(p.id)}
+                              aria-label={expandedPurchases[p.id] ? `إخفاء تفاصيل الفاتورة #${p.id}` : `عرض تفاصيل الفاتورة #${p.id}`}
+                              className="inline-flex items-center justify-center p-1.5 rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                            >
+                              {expandedPurchases[p.id] ? (
+                                <ChevronUp className="w-4 h-4" />
+                              ) : (
+                                <ChevronDown className="w-4 h-4" />
+                              )}
+                            </button>
+                          </td>
                           <td className="px-4 py-3">
                             <span className="block font-medium">{formatDate(p.created_at)}</span>
                             <span className="text-xs text-gray-500">#{p.id}</span>
@@ -166,18 +185,21 @@ export default function SupplierDetail() {
                             {formatCurrency(p.total_amount)}
                           </td>
                         </tr>
-                        {p.items?.length ? (
+                        {expandedPurchases[p.id] && p.items?.length ? (
                           <tr className="bg-gray-50/50 dark:bg-gray-900/20">
-                            <td colSpan={3} className="px-4 py-3">
+                            <td colSpan={4} className="px-4 py-3">
                               <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wider">
                                 تفاصيل الأصناف الملبمة:
                               </div>
                               <div className="space-y-2">
                                 {p.items.map((item) => (
                                   <div key={item.id} className="flex justify-between items-center text-sm border-b border-gray-100 dark:border-gray-800 pb-1 last:border-0 last:pb-0">
-                                    <span className="text-gray-700 dark:text-gray-300">
+                                    <Link
+                                      to={`/inventory/products/${item.product_id}`}
+                                      className="text-primary-700 dark:text-primary-400 hover:underline font-medium"
+                                    >
                                       {item.product_name}
-                                    </span>
+                                    </Link>
                                     <div className="flex gap-4">
                                       <span className="text-gray-500">
                                         السعر: <strong>{formatCurrency(item.unit_price)}</strong>

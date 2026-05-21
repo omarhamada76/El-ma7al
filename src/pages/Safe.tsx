@@ -9,6 +9,7 @@ import SafeAdjustmentModal from '@/components/SafeAdjustmentModal'
 import SafeSetBalanceModal from '@/components/SafeSetBalanceModal'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 const typeLabels: Record<string, string> = {
   initial: 'رصيد افتتاحي',
@@ -28,6 +29,7 @@ export default function Safe() {
   const [setBalanceOpen, setSetBalanceOpen] = useState(false)
   const [safeCelebrate, setSafeCelebrate] = useState<{ title: string } | null>(null)
   const [feedback, setFeedback] = useState<{ type: 'error' | 'warning'; message: string } | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; title: string; message: string; variant?: 'danger' | 'warning'; loading?: boolean; onConfirm: () => void } | null>(null)
   const queryClient = useQueryClient()
   const initialMutation = useMutation({
     mutationFn: setInitialBalance,
@@ -104,6 +106,15 @@ export default function Safe() {
 
   return (
     <div className="space-y-6" dir="rtl">
+      <ConfirmDialog
+        open={!!confirmDialog?.open}
+        title={confirmDialog?.title ?? ''}
+        message={confirmDialog?.message ?? ''}
+        variant={confirmDialog?.variant ?? 'danger'}
+        loading={confirmDialog?.loading}
+        onConfirm={confirmDialog?.onConfirm ?? (() => {})}
+        onCancel={() => setConfirmDialog(null)}
+      />
       <SuccessOverlay
         open={!!safeCelebrate}
         title={safeCelebrate?.title ?? ''}
@@ -160,9 +171,16 @@ export default function Safe() {
             type="button"
             className="px-4 py-2 rounded-lg border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 font-medium text-sm"
             onClick={() => {
-              if (window.confirm(`هل أنت متأكد من تصفير الخزنه؟ سيتم سحب ${formatCurrency(balance)} من الرصيد.`)) {
-                adjustMutation.mutate({ type: 'adjustment_out', amount: balance, notes: 'تصفير الخزنه' })
-              }
+              setConfirmDialog({
+                open: true,
+                title: 'تصفير الخزنه',
+                message: `هل أنت متأكد من تصفير الخزنه؟ سيتم سحب ${formatCurrency(balance)} من الرصيد.`,
+                variant: 'danger',
+                onConfirm: () => {
+                  setConfirmDialog(null)
+                  adjustMutation.mutate({ type: 'adjustment_out', amount: balance, notes: 'تصفير الخزنه' })
+                },
+              })
             }}
           >
             تصفير الخزنه
@@ -201,13 +219,16 @@ export default function Safe() {
             className="text-sm px-3 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-200 hover:bg-amber-50 dark:hover:bg-amber-900/20 font-medium"
             disabled={clearHistoryMutation.isPending || transactions.length === 0}
             onClick={() => {
-              if (
-                window.confirm(
-                  'هل تريد مسح السجل؟ سيتم حذف كل الحركات القابلة للحذف (رصيد افتتاحي، تعديلات، تصفير…). تبقى حركات سداد العملاء والموردين المرتبطة بالنظام.'
-                )
-              ) {
-                clearHistoryMutation.mutate()
-              }
+              setConfirmDialog({
+                open: true,
+                title: 'مسح السجل',
+                message: 'هل تريد مسح السجل؟ سيتم حذف كل الحركات القابلة للحذف (رصيد افتتاحي، تعديلات، تصفير…). تبقى حركات سداد العملاء والموردين المرتبطة بالنظام.',
+                variant: 'warning',
+                onConfirm: () => {
+                  setConfirmDialog(null)
+                  clearHistoryMutation.mutate()
+                },
+              })
             }}
           >
             مسح السجل
@@ -282,13 +303,16 @@ export default function Safe() {
                           className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500"
                           title="حذف هذه الحركة من سجل الخزنه"
                           onClick={() => {
-                            if (
-                              window.confirm(
-                                'هل أنت متأكد من حذف هذه الحركة من سجل الخزنه؟ سيتم تعديل الرصيد تلقائياً.'
-                              )
-                            ) {
-                              deleteTxMutation.mutate(tx.id)
-                            }
+                            setConfirmDialog({
+                              open: true,
+                              title: 'حذف الحركة',
+                              message: 'هل أنت متأكد من حذف هذه الحركة من سجل الخزنه؟ سيتم تعديل الرصيد تلقائياً.',
+                              variant: 'danger',
+                              onConfirm: () => {
+                                setConfirmDialog(null)
+                                deleteTxMutation.mutate(tx.id)
+                              },
+                            })
                           }}
                         >
                           <Trash2 className="w-4 h-4" />

@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FileSpreadsheet, Phone, MessageCircle, Plus, ArrowRight, Pencil, Trash2, Search } from 'lucide-react'
+import { FileSpreadsheet, Phone, MessageCircle, Plus, ArrowRight, ArrowLeft, Pencil, Trash2, Search } from 'lucide-react'
 import { getClient, getClientBarns, getClientBalance, updateClient, deleteClient } from '@/api/clients'
 import { createBarn, updateBarn } from '@/api/barns'
-import { formatCurrency } from '@/lib/utils'
+import { getPayments } from '@/api/payments'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import AddBarnModal from '@/components/AddBarnModal'
 import AddClientModal from '@/components/AddClientModal'
@@ -28,6 +29,13 @@ export default function ClientDetail() {
   const [addBarnOpen, setAddBarnOpen] = useState(false)
   const [editBarn, setEditBarn] = useState<{ id: number; name: string; initial_debt: number } | null>(null)
   const [barnSearch, setBarnSearch] = useState('')
+  
+  const { data: discountsData, isLoading: isDiscountsLoading } = useQuery({
+    queryKey: ['client', id, 'discounts'],
+    queryFn: () => getPayments({ client_id: Number(id), payment_method: 'discount', limit: 20 }),
+    enabled: !!id && showFinancials,
+  })
+  const clientDiscounts = discountsData?.data ?? []
   
   const updateBarnMutation = useMutation({
     mutationFn: ({ id, body }: { id: number; body: { name: string; initial_debt: number } }) =>
@@ -318,6 +326,78 @@ export default function ClientDetail() {
           </ul>
         )}
       </div>
+
+      {showFinancials && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-4 bg-gray-50/50 dark:bg-gray-800/30 p-3 rounded-xl border border-gray-100 dark:border-gray-700/50">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-200">الخصومات المسجلة للعميل</h2>
+          </div>
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 overflow-hidden shadow-sm">
+            {isDiscountsLoading ? (
+              <div className="p-4 space-y-2">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-10 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+                ))}
+              </div>
+            ) : clientDiscounts.length === 0 ? (
+              <p className="p-6 text-center text-gray-500 dark:text-gray-400">
+                لا توجد خصومات مسجّلة لهذا العميل.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50 text-gray-700 dark:text-gray-300">
+                      <th className="text-right py-3 px-4 font-semibold">التاريخ</th>
+                      <th className="text-right py-3 px-4 font-semibold">العنبر</th>
+                      <th className="text-right py-3 px-4 font-semibold">قيمة الخصم</th>
+                      <th className="text-right py-3 px-4 font-semibold">ملاحظات / السبب</th>
+                      <th className="text-right py-3 px-4 w-24"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clientDiscounts.map((p) => (
+                      <tr
+                        key={p.id}
+                        className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors"
+                      >
+                        <td className="py-2.5 px-4 text-gray-600 dark:text-gray-400">{formatDate(p.payment_date)}</td>
+                        <td className="py-2.5 px-4">
+                          {p.barn_id != null ? (
+                            <Link
+                              to={`/barns/${p.barn_id}`}
+                              className="text-primary-600 dark:text-primary-400 hover:underline font-medium"
+                            >
+                              {p.barn_name ?? `#${p.barn_id}`}
+                            </Link>
+                          ) : (
+                            <span className="text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-xs">عام / بدون تحديد عنبر</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 font-bold text-red-600 dark:text-red-400">
+                          {formatCurrency(p.amount)}
+                        </td>
+                        <td className="py-2.5 px-4 text-gray-700 dark:text-gray-300 max-w-xs truncate" title={p.notes || ''}>
+                          {p.notes || <span className="text-gray-400">—</span>}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          <Link
+                            to={`/payments/${p.id}`}
+                            className="inline-flex items-center gap-1 text-primary-600 dark:text-primary-400 hover:underline font-medium text-sm"
+                          >
+                            عرض
+                            <ArrowLeft className="w-4 h-4" />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

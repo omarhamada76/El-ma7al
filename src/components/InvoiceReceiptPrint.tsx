@@ -122,7 +122,7 @@ export default function InvoiceReceiptPrint({
     <>
       <button type="button" onClick={handlePrint} className={cn(btnClass, 'invoice-receipt-no-print')}>
         <Printer className="w-4 h-4 shrink-0" />
-        الكود بعت Feed بدون Print command
+        طباعة الفاتورة
       </button>
 
       <div

@@ -54,6 +54,32 @@ async function query(sql: string, params: unknown[] = []) {
   }
 }
 
+async function syncWarehouseStockFromBatches(productId: number, warehouseId: number) {
+  await query(
+    `
+      insert into product_warehouse_stock (product_id, warehouse_id, quantity, updated_at)
+      values (
+        $1,
+        $2,
+        coalesce((
+          select sum(
+            case when coalesce(unit_type, 'piece') = 'bulk'
+              then coalesce(kg_remaining, 0)
+              else coalesce(quantity, 0)
+            end
+          )
+          from product_batches
+          where product_id = $1 and warehouse_id = $2
+        ), 0),
+        now()
+      )
+      on conflict (product_id, warehouse_id) do update
+      set quantity = excluded.quantity, updated_at = now()
+    `,
+    [productId, warehouseId],
+  )
+}
+
 async function transaction<T>(
   run: (q: (sql: string, params?: unknown[]) => Promise<ReturnType<typeof query>>) => Promise<T>,
 ): Promise<T> {
@@ -897,7 +923,6 @@ Deno.serve(async (req) => {
       const limit = Math.min(Number(sp.get('limit') || 50), 500)
       const search = normalizeArabicNumbers(sp.get('search') || '')
       const pinned = sp.get('pinned')
-      const sort = sp.get('sort')
       const where: string[] = []
       const args: unknown[] = []
       if (search) {
@@ -920,9 +945,11 @@ Deno.serve(async (req) => {
           where p.client_id = c.id
         ),0)
       )`
-      const orderSql = sort === 'debt_desc'
-        ? `order by ${balanceExpr} desc, c.id desc`
-        : 'order by c.id desc'
+      const orderSql = `order by
+        case when coalesce(c.pinned, false) then 0 else 1 end,
+        c.pinned_at asc nulls last,
+        ${balanceExpr} desc,
+        c.id desc`
       args.push(limit)
       const out = await query(
         `select c.*, ${balanceExpr} as balance
@@ -1420,15 +1447,17 @@ Deno.serve(async (req) => {
       const pLimit = addListParam(limit)
       const pOffset = addListParam(offset)
 
-      let stockSelect = whParam
-        ? `coalesce(pws.quantity, 0) as warehouse_stock`
-        : `coalesce((select quantity from product_warehouse_stock where product_id = p.id and warehouse_id = 1), 0) as warehouse_stock`
+      let stockSelect = `coalesce((
+          select sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end)
+          from product_batches pb
+          where pb.product_id = p.id and pb.warehouse_id = ${whParam ? whParam : '1'}
+        ), 0) as warehouse_stock`
 
       let wsJoin = `left join lateral (
-        select sum(s.quantity) as batch_total_quantity
-        from product_warehouse_stock s
-        where s.product_id = p.id
-         ${whParam ? `and s.warehouse_id = ${whParam}` : 'and s.warehouse_id = 1'}
+          select coalesce(sum(case when pb.unit_type = 'bulk' then pb.kg_remaining else pb.quantity end), 0) as batch_total_quantity
+          from product_batches pb
+          where pb.product_id = p.id
+            ${whParam ? `and pb.warehouse_id = ${whParam}` : 'and pb.warehouse_id = 1'}
       ) ws on true`
 
       if (expiring) {
@@ -1483,7 +1512,6 @@ Deno.serve(async (req) => {
            coalesce(bi.bulk_open_bag_low, false) as bulk_open_bag_low
          from products p
          ${wsJoin}
-         ${whParam ? `left join product_warehouse_stock pws on pws.product_id = p.id and pws.warehouse_id = ${whParam}` : ''}
          left join lateral (
            select min(pb.purchase_price) as purchase_price_min,
                   max(pb.purchase_price) as purchase_price_max,
@@ -1936,6 +1964,15 @@ Deno.serve(async (req) => {
       const body = await parseJson(req) as Record<string, unknown>
       const wid = Number(body.warehouse_id ?? 1)
       const delta = Number(body.quantity_delta ?? 0)
+      const existingBatches = await query(
+        'select 1 from product_batches where product_id = $1 and warehouse_id = $2 limit 1',
+        [pid, wid],
+      )
+      if (existingBatches.rows?.length) {
+        return send(400, {
+          message: 'لا يمكن تعديل مخزون مباشر لمنتج لديه دُفعات. عدّل الكمية من الدُفعات.',
+        })
+      }
       await query(
         `insert into product_warehouse_stock (product_id, warehouse_id, quantity)
          values ($1,$2,$3)
@@ -1960,6 +1997,9 @@ Deno.serve(async (req) => {
     if (method === 'PATCH' && patchBatch) {
       await requireAuth(req)
       const id = Number(patchBatch[1])
+      const before = await query('select product_id, warehouse_id from product_batches where id = $1 limit 1', [id])
+      const prev = before.rows?.[0]
+      if (!prev) return send(404, { message: 'الدفعة غير موجودة' })
       const body = await parseJson(req) as Record<string, unknown>
       const fields: string[] = []
       const vals: unknown[] = []
@@ -1975,14 +2015,29 @@ Deno.serve(async (req) => {
       }
       vals.push(id)
       const out = await query(`update product_batches set ${fields.join(', ')}, updated_at = now() where id = $${vals.length} returning *`, vals)
-      return send(200, out.rows?.[0] ?? null)
+      const row = out.rows?.[0]
+      const productId = Number(row?.product_id ?? prev.product_id)
+      const warehouseId = Number(row?.warehouse_id ?? prev.warehouse_id)
+      if (Number.isFinite(productId) && Number.isFinite(warehouseId)) {
+        await syncWarehouseStockFromBatches(productId, warehouseId)
+      }
+      return send(200, row ?? null)
     }
 
     const deleteBatch = path.match(/^\/products\/batches\/(\d+)$/)
     if (method === 'DELETE' && deleteBatch) {
       await requireAuth(req)
       const id = Number(deleteBatch[1])
+      const before = await query('select product_id, warehouse_id from product_batches where id = $1 limit 1', [id])
+      const prev = before.rows?.[0]
       await query('delete from product_batches where id = $1', [id])
+      if (prev) {
+        const productId = Number(prev.product_id)
+        const warehouseId = Number(prev.warehouse_id)
+        if (Number.isFinite(productId) && Number.isFinite(warehouseId)) {
+          await syncWarehouseStockFromBatches(productId, warehouseId)
+        }
+      }
       return send(204, {})
     }
 
@@ -2248,7 +2303,12 @@ Deno.serve(async (req) => {
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
       args.push(limit)
       const out = await query(
-        `select * from invoices ${whereSql} order by id desc limit $${args.length}`,
+        `select invoices.*, b.name as barn_name
+         from invoices
+         left join barns b on b.id = invoices.barn_id
+         ${whereSql}
+         order by invoices.id desc
+         limit $${args.length}`,
         args,
       )
       const invoices = out.rows as Array<Record<string, unknown>>
@@ -2267,6 +2327,7 @@ Deno.serve(async (req) => {
         `select
            inv.*,
            wh.name_ar as warehouse_name_ar,
+           (select b.name from barns b where b.id = inv.barn_id) as barn_name,
            (
              coalesce((select c0.initial_debt from clients c0 where c0.id = inv.client_id), 0) +
              coalesce((select sum(br.initial_debt) from barns br where br.client_id = inv.client_id), 0) +

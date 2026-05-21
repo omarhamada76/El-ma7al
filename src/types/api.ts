@@ -208,6 +208,8 @@ export interface Invoice {
   client_balance_after?: number | null
   /** من JOIN warehouses — اسم المخزن */
   warehouse_name_ar?: string | null
+  /** اسم العنبر المضاف من JOIN barns */
+  barn_name?: string | null
   /** رصيد العنبر المحاسبي قبل/بعد تسجيل الفاتورة — من GET تفاصيل (عند وجود barn_id) */
   barn_balance_before?: number | null
   barn_balance_after?: number | null

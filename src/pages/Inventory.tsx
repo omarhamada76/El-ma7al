@@ -376,7 +376,7 @@ export default function Inventory() {
                   const blob = await createInventoryPdfBlob(products, title, {
                     warehouseName: warehouses.find((w) => w.id === warehouseId)?.name_ar,
                     warehouseStockMap: Object.fromEntries(
-                      products.map((p) => [p.id, p.warehouse_stock ?? p.batch_total_quantity ?? 0])
+                      products.map((p) => [p.id, p.batch_total_quantity ?? p.warehouse_stock ?? 0])
                     ),
                   })
 
@@ -632,8 +632,8 @@ export default function Inventory() {
                   /** Inline PATCH only updates `products.*`; ranges block quick edit (use product detail for batches). */
                   const batchRangePreventsInline =
                     (hasBatchPP && !ppIsSingle) || (hasBatchSP && !spIsSingle)
-                  // Stock: use batch_total_quantity when available, else warehouse map
-                  const batchQty = p.batch_total_quantity ?? null
+                  // Stock: prefer batch_total_quantity (source of truth), fallback to warehouse_stock
+                  const displayQty = Number(p.batch_total_quantity ?? p.warehouse_stock ?? 0)
                   /** Same pattern as «سعر الشراء»: batch min/max when present, else product default or «تحديد السعر». */
                   const sellingPriceCellContent = (hasBatchSP && (spMin! > 0 || spMax! > 0)) ? (
                     spIsSingle ? (
@@ -818,7 +818,7 @@ export default function Inventory() {
                             <span className="inline-flex items-center gap-1 flex-wrap justify-end">
                               {p.unit_type === 'bulk' ? (
                                 <>
-                                  {formatNumber(Number(p.warehouse_stock ?? 0), 2)} كيلو
+                                  {formatNumber(displayQty, 2)} كيلو
                                   {p.bulk_bag_count != null && p.bulk_bag_count > 0 && (
                                     <span className="text-gray-500 dark:text-gray-400 text-xs">
                                       ({p.bulk_bag_count} شكارة)
@@ -831,7 +831,7 @@ export default function Inventory() {
                                   )}
                                 </>
                               ) : (
-                                p.warehouse_stock ?? 0
+                                formatNumber(displayQty, 0)
                               )}
                             </span>
                             <button
@@ -842,7 +842,7 @@ export default function Inventory() {
                                   product: p,
                                   warehouseId,
                                   warehouseName: wh?.name_ar ?? '',
-                                  currentQuantity: p.warehouse_stock ?? 0,
+                                  currentQuantity: displayQty,
                                 })
                               }}
                               className="text-primary-600 dark:text-primary-400 hover:underline text-sm font-medium"
@@ -853,8 +853,8 @@ export default function Inventory() {
                         ) : (
                           <span>
                             {p.unit_type === 'bulk'
-                              ? `${formatNumber(Number(batchQty ?? 0), 2)} كجم`
-                              : formatNumber(Number(batchQty ?? 0), 0)}
+                              ? `${formatNumber(displayQty, 2)} كجم`
+                              : formatNumber(displayQty, 0)}
                           </span>
                         )}
                       </td>
@@ -964,6 +964,7 @@ export default function Inventory() {
             onProductSaved={() => {
               queryClient.invalidateQueries({ queryKey: ['products'] })
               queryClient.invalidateQueries({ queryKey: ['warehouse-stock'] })
+              queryClient.invalidateQueries({ queryKey: ['dashboard'] })
               setEditProduct(null)
               setInventoryCelebrate({ title: 'تم حفظ بيانات المنتج بنجاح' })
             }}
@@ -981,6 +982,9 @@ export default function Inventory() {
             onSuccess={() => {
               queryClient.invalidateQueries({ queryKey: ['warehouse-stock', stockEdit.warehouseId] })
               queryClient.invalidateQueries({ queryKey: ['products'] })
+              queryClient.invalidateQueries({ queryKey: ['product', String(stockEdit.product.id), 'stock'] })
+              queryClient.invalidateQueries({ queryKey: ['product', String(stockEdit.product.id), 'batches'] })
+              queryClient.invalidateQueries({ queryKey: ['dashboard'] })
               setInventoryCelebrate({ title: 'تم تحديث الكمية بنجاح' })
             }}
           />

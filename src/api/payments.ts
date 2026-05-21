@@ -17,6 +17,7 @@ export interface PaymentsParams {
   limit?: number
   client_id?: number
   barn_id?: number
+  payment_method?: string
   from?: string
   to?: string
 }

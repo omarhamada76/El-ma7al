@@ -503,15 +503,13 @@ export function getClients(search, pinned, limit = 50, sort) {
     params.push(s, s)
   }
   if (pinned === true || pinned === 'true') sql += ' AND pinned = 1'
-  if (sort === 'debt_desc') {
-    sql += ` ORDER BY (
-      COALESCE(clients.initial_debt,0)
-      + COALESCE((SELECT SUM(i.total_amount) FROM invoices i WHERE i.client_id = clients.id AND (COALESCE(i.invoice_lifecycle, 'active') != 'cancelled')), 0)
-      - COALESCE((SELECT SUM(${sqlPaymentAmountTowardArExpr('p')}) FROM payments p WHERE p.client_id = clients.id), 0)
-    ) DESC, clients.id DESC`
-  } else {
-    sql += ' ORDER BY id DESC'
-  }
+  const balanceOrderExpr = `(
+    COALESCE(clients.initial_debt,0)
+    + COALESCE((SELECT SUM(b.initial_debt) FROM barns b WHERE b.client_id = clients.id), 0)
+    + COALESCE((SELECT SUM(i.total_amount) FROM invoices i WHERE i.client_id = clients.id AND (COALESCE(i.invoice_lifecycle, 'active') != 'cancelled')), 0)
+    - COALESCE((SELECT SUM(${sqlPaymentAmountTowardArExpr('p')}) FROM payments p WHERE p.client_id = clients.id), 0)
+  )`
+  sql += ` ORDER BY clients.pinned DESC, CASE WHEN clients.pinned_at IS NULL THEN 1 ELSE 0 END, clients.pinned_at ASC, ${balanceOrderExpr} DESC, clients.id DESC`
   sql += ' LIMIT ?'
   params.push(Math.min(limit, 500))
   const rows = d.prepare(sql).all(...params)
@@ -520,16 +518,22 @@ export function getClients(search, pinned, limit = 50, sort) {
   const ids = clients.map((c) => c.id)
   const placeholders = ids.map(() => '?').join(',')
   const invRows = d.prepare(`SELECT client_id, COALESCE(SUM(total_amount),0) as s FROM invoices WHERE client_id IN (${placeholders}) AND (COALESCE(invoice_lifecycle, 'active') != 'cancelled') GROUP BY client_id`).all(...ids)
+  const barnRows = d.prepare(`SELECT client_id, COALESCE(SUM(initial_debt),0) as s FROM barns WHERE client_id IN (${placeholders}) GROUP BY client_id`).all(...ids)
   const payRows = d
     .prepare(
       `SELECT client_id, COALESCE(SUM(${sqlPaymentAmountTowardArExpr('')}),0) as s FROM payments WHERE client_id IN (${placeholders}) GROUP BY client_id`
     )
     .all(...ids)
   const invByClient = Object.fromEntries(invRows.map((r) => [r.client_id, r.s]))
+  const barnByClient = Object.fromEntries(barnRows.map((r) => [r.client_id, r.s]))
   const payByClient = Object.fromEntries(payRows.map((r) => [r.client_id, r.s]))
   return clients.map((c) => ({
     ...c,
-    balance: (c.initial_debt ?? 0) + (invByClient[c.id] ?? 0) - (payByClient[c.id] ?? 0),
+    balance:
+      (c.initial_debt ?? 0) +
+      (barnByClient[c.id] ?? 0) +
+      (invByClient[c.id] ?? 0) -
+      (payByClient[c.id] ?? 0),
   }))
 }
 
@@ -1033,6 +1037,7 @@ export function getProductCountFiltered(search, category, warehouseId = null, lo
 export function getProducts(search, category, limit = 100, offset = 0, warehouseId = null, lowStock = false, unpriced = false, expiring = false, showArchived = false, expired = false) {
   const d = getDb()
   const whOk = warehouseId != null && Number.isInteger(warehouseId)
+  const batchAggWarehouseWhere = whOk ? 'WHERE pb.warehouse_id = ?' : ''
 
   let batchTotalQtySelect;
   if (expiring) {
@@ -1087,7 +1092,12 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
       ), 0) AS warehouse_stock`;
       stockSelectParams.push(warehouseId)
     } else {
-      stockSelect = `COALESCE(pws.quantity, 0) AS warehouse_stock`;
+      stockSelect = `COALESCE((
+        SELECT SUM(CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)
+        FROM product_batches pb
+        WHERE pb.product_id = p.id AND pb.warehouse_id = ?
+      ), 0) AS warehouse_stock`;
+      stockSelectParams.push(warehouseId)
     }
   } else {
     if (expiring) {
@@ -1129,6 +1139,7 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
         ${batchTotalQtySelect}
       FROM product_batches pb
       LEFT JOIN products px ON px.id = pb.product_id
+      ${batchAggWarehouseWhere}
       GROUP BY pb.product_id
     ) ba ON ba.product_id = p.id
     LEFT JOIN (
@@ -1150,8 +1161,11 @@ export function getProducts(search, category, limit = 100, offset = 0, warehouse
   }
 
   const params = []
-  if (whOk && (expiring || expired)) {
+  if (whOk && stockSelectParams.length > 0) {
     params.push(...stockSelectParams)
+  }
+  if (whOk) {
+    params.push(warehouseId)
   }
   if (whOk) {
     params.push(...pwsJoinParams)
@@ -2242,33 +2256,48 @@ export function getInvoices(limitOrOpts = 50) {
   const d = getDb()
   const opts = typeof limitOrOpts === 'number' ? { limit: limitOrOpts } : limitOrOpts || {}
   const limit = Math.min(Number(opts.limit) || 50, 200)
-  const parts = [`COALESCE(invoice_lifecycle, 'active') != 'cancelled'`]
+  const parts = [`COALESCE(invoices.invoice_lifecycle, 'active') != 'cancelled'`]
   const params = []
-  if (opts.unpaid_only) parts.push('COALESCE(remaining_amount, 0) > 0')
+  if (opts.unpaid_only) parts.push('COALESCE(invoices.remaining_amount, 0) > 0')
   if (opts.payment_method) {
     const pm = String(opts.payment_method)
     if (pm === 'آجل' || pm === 'credit' || pm === 'deferred') {
-      parts.push(`COALESCE(payment_method, '') IN ('آجل', 'credit', 'deferred')`)
+      parts.push(`COALESCE(invoices.payment_method, '') IN ('آجل', 'credit', 'deferred')`)
     } else {
-      parts.push('payment_method = ?')
+      parts.push('invoices.payment_method = ?')
       params.push(pm)
     }
   }
   if (opts.warehouse_id != null && Number.isFinite(Number(opts.warehouse_id))) {
-    parts.push('warehouse_id = ?')
+    parts.push('invoices.warehouse_id = ?')
     params.push(Number(opts.warehouse_id))
   }
   if (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.from).slice(0, 10))) {
-    parts.push('date(created_at) >= date(?)')
+    parts.push('date(invoices.created_at) >= date(?)')
     params.push(String(opts.from).slice(0, 10))
   }
   if (opts.to && /^\d{4}-\d{2}-\d{2}$/.test(String(opts.to).slice(0, 10))) {
-    parts.push('date(created_at) <= date(?)')
+    parts.push('date(invoices.created_at) <= date(?)')
     params.push(String(opts.to).slice(0, 10))
+  }
+  if (opts.client_id != null && Number.isFinite(Number(opts.client_id))) {
+    parts.push('invoices.client_id = ?')
+    params.push(Number(opts.client_id))
+  }
+  if (opts.barn_id != null && Number.isFinite(Number(opts.barn_id))) {
+    parts.push('invoices.barn_id = ?')
+    params.push(Number(opts.barn_id))
   }
   const where = parts.join(' AND ')
   const rows = d
-    .prepare(`SELECT * FROM invoices WHERE ${where} ORDER BY id DESC LIMIT ?`)
+    .prepare(`
+      SELECT invoices.*, b.name AS barn_name 
+      FROM invoices 
+      LEFT JOIN barns b ON b.id = invoices.barn_id 
+      WHERE ${where} 
+      ORDER BY invoices.id DESC 
+      LIMIT ?
+    `)
     .all(...params, limit)
   return rows.map(inv => {
     const items = d.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(inv.id)
@@ -3257,20 +3286,46 @@ export function deleteInvoice(id) {
 }
 
 // ----- Payments -----
-export function getPayments(limit = 50) {
-  return getDb()
-    .prepare(
-      `
-        SELECT p.*, c.name AS client_name, b.name AS barn_name
-        FROM payments p
-        LEFT JOIN clients c ON c.id = p.client_id
-        LEFT JOIN barns b ON b.id = p.barn_id
-        WHERE p.invoice_id IS NULL
-        ORDER BY p.id DESC
-        LIMIT ?
-      `
-    )
-    .all(Math.min(limit, 200))
+export function getPayments(options = {}) {
+  let limit = 50
+  let clientId = undefined
+  let barnId = undefined
+  let paymentMethod = undefined
+
+  if (typeof options === 'number') {
+    limit = options
+  } else if (options && typeof options === 'object') {
+    limit = options.limit ?? 50
+    clientId = options.client_id
+    barnId = options.barn_id
+    paymentMethod = options.payment_method
+  }
+
+  const params = []
+  let sql = `
+    SELECT p.*, c.name AS client_name, b.name AS barn_name
+    FROM payments p
+    LEFT JOIN clients c ON c.id = p.client_id
+    LEFT JOIN barns b ON b.id = p.barn_id
+    WHERE p.invoice_id IS NULL
+  `
+  if (clientId !== undefined && clientId !== null) {
+    sql += ` AND p.client_id = ?`
+    params.push(clientId)
+  }
+  if (barnId !== undefined && barnId !== null) {
+    sql += ` AND p.barn_id = ?`
+    params.push(barnId)
+  }
+  if (paymentMethod !== undefined && paymentMethod !== null) {
+    sql += ` AND p.payment_method = ?`
+    params.push(paymentMethod)
+  }
+
+  sql += ` ORDER BY p.id DESC LIMIT ?`
+  params.push(Math.min(Number(limit) || 50, 200))
+
+  return getDb().prepare(sql).all(...params)
 }
 
 export function createPayment(data) {

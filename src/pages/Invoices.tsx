@@ -214,9 +214,17 @@ export default function Invoices() {
                       {paymentMethodLabel(inv.payment_method)}
                     </span>
                   </div>
-                  <div className="min-w-0">
-                    <p className="mobile-card-label">العميل</p>
-                    <p className="mobile-card-value truncate">{inv.customer_name}</p>
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="min-w-0">
+                      <p className="mobile-card-label">العميل</p>
+                      <p className="mobile-card-value truncate">{inv.customer_name}</p>
+                    </div>
+                    <div>
+                      <p className="mobile-card-label">العنبر</p>
+                      <p className="mobile-card-value truncate text-gray-700 dark:text-gray-300">
+                        {inv.barn_id ? (inv.barn_name ?? `#${inv.barn_id}`) : <span className="text-gray-400 dark:text-gray-600">—</span>}
+                      </p>
+                    </div>
                   </div>
                   <div className="flex justify-between gap-4 pt-1">
                     <div>
@@ -240,6 +248,7 @@ export default function Invoices() {
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">#</th>
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">التاريخ</th>
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">العميل</th>
+                    <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">العنبر</th>
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">المجموع</th>
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">المدفوع</th>
                     <th className="text-right py-3.5 px-4 font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">النوع</th>
@@ -254,7 +263,30 @@ export default function Invoices() {
                     >
                       <td className="py-3 px-4 font-medium">{inv.id}</td>
                       <td className="py-3 px-4 text-gray-500 dark:text-gray-400">{formatDate(inv.created_at)}</td>
-                      <td className="py-3 px-4 font-medium">{inv.customer_name}</td>
+                      <td className="py-3 px-4 font-medium">
+                        {inv.client_id ? (
+                          <Link
+                            to={`/clients/${inv.client_id}`}
+                            className="text-primary-600 dark:text-primary-400 hover:underline"
+                          >
+                            {inv.customer_name}
+                          </Link>
+                        ) : (
+                          inv.customer_name
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        {inv.barn_id ? (
+                          <Link
+                            to={`/barns/${inv.barn_id}`}
+                            className="text-primary-600 dark:text-primary-400 hover:underline"
+                          >
+                            {inv.barn_name ?? `#${inv.barn_id}`}
+                          </Link>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-600">—</span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-primary-600 dark:text-primary-400 font-bold">{formatCurrency(inv.total_amount)}</td>
                       <td className="py-3 px-4">{formatCurrency(inv.paid_amount)}</td>
                       <td className="py-3 px-4">
