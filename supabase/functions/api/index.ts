@@ -1702,6 +1702,153 @@ Deno.serve(async (req) => {
       }
     }
 
+    const productHistory = path.match(/^\/products\/(\d+)\/history$/)
+    if (method === 'GET' && productHistory) {
+      await requireAuth(req)
+      const pid = Number(productHistory[1])
+      
+      const q = `
+        SELECT
+          date,
+          type,
+          entity_name,
+          warehouse_name,
+          quantity,
+          price,
+          reference_id,
+          notes
+        FROM (
+          -- 1. Purchases (inbound from suppliers)
+          SELECT
+            spi.created_at AS date,
+            'purchase' AS type,
+            s.name AS entity_name,
+            w.name_ar AS warehouse_name,
+            (CASE WHEN spi.unit_type = 'bulk' THEN spi.quantity * COALESCE(spi.kg_per_bag, 0) ELSE spi.quantity END)::float AS quantity,
+            spi.unit_price::float AS price,
+            sp.id::text AS reference_id,
+            sp.notes AS notes
+          FROM supplier_purchase_items spi
+          JOIN supplier_purchases sp ON sp.id = spi.supplier_purchase_id
+          LEFT JOIN suppliers s ON s.id = sp.supplier_id
+          LEFT JOIN warehouses w ON w.id = sp.warehouse_id
+          WHERE spi.product_id = $1
+
+          UNION ALL
+
+          -- 2. Sales (outbound to clients)
+          SELECT
+            ii.created_at AS date,
+            'sale' AS type,
+            COALESCE(c.name, i.customer_name) AS entity_name,
+            w.name_ar AS warehouse_name,
+            -ii.quantity::float AS quantity,
+            ii.unit_price::float AS price,
+            i.id::text AS reference_id,
+            i.notes AS notes
+          FROM invoice_items ii
+          JOIN invoices i ON i.id = ii.invoice_id
+          LEFT JOIN clients c ON c.id = i.client_id
+          LEFT JOIN warehouses w ON w.id = i.warehouse_id
+          WHERE ii.product_id = $1 AND COALESCE(i.invoice_lifecycle, 'active') != 'cancelled'
+
+          UNION ALL
+
+          -- 3. Transfers Out (outgoing from source warehouse)
+          SELECT
+            t.created_at AS date,
+            'transfer_out' AS type,
+            w_to.name_ar AS entity_name,
+            w_from.name_ar AS warehouse_name,
+            -ti.quantity::float AS quantity,
+            NULL::float AS price,
+            t.id::text AS reference_id,
+            t.notes AS notes
+          FROM inventory_transfer_items ti
+          JOIN inventory_transfers t ON t.id = ti.transfer_id
+          LEFT JOIN warehouses w_from ON w_from.id = t.from_warehouse_id
+          LEFT JOIN warehouses w_to ON w_to.id = t.to_warehouse_id
+          WHERE ti.product_id = $1
+
+          UNION ALL
+
+          -- 4. Transfers In (incoming to destination warehouse)
+          SELECT
+            t.created_at AS date,
+            'transfer_in' AS type,
+            w_from.name_ar AS entity_name,
+            w_to.name_ar AS warehouse_name,
+            ti.quantity::float AS quantity,
+            NULL::float AS price,
+            t.id::text AS reference_id,
+            t.notes AS notes
+          FROM inventory_transfer_items ti
+          JOIN inventory_transfers t ON t.id = ti.transfer_id
+          LEFT JOIN warehouses w_from ON w_from.id = t.from_warehouse_id
+          LEFT JOIN warehouses w_to ON w_to.id = t.to_warehouse_id
+          WHERE ti.product_id = $1
+
+          UNION ALL
+
+          -- 5. Returns (inbound from clients)
+          SELECT
+            ri.return_date AS date,
+            'return' AS type,
+            COALESCE(c.name, i.customer_name) AS entity_name,
+            w.name_ar AS warehouse_name,
+            ri.returned_quantity::float AS quantity,
+            NULL::float AS price,
+            rd.invoice_id::text AS reference_id,
+            ri.notes AS notes
+          FROM return_items ri
+          JOIN return_documents rd ON rd.id = ri.return_document_id
+          LEFT JOIN invoices i ON i.id = rd.invoice_id
+          LEFT JOIN clients c ON c.id = rd.client_id
+          LEFT JOIN warehouses w ON w.id = i.warehouse_id
+          JOIN invoice_items ii ON ii.id = ri.invoice_item_id
+          WHERE ii.product_id = $1
+
+          UNION ALL
+
+          -- 6. Manual Adjustments
+          SELECT
+            ia.created_at AS date,
+            'adjustment' AS type,
+            NULL AS entity_name,
+            w.name_ar AS warehouse_name,
+            ia.quantity_delta::float AS quantity,
+            NULL::float AS price,
+            NULL AS reference_id,
+            ia.reason AS notes
+          FROM inventory_adjustments ia
+          LEFT JOIN warehouses w ON w.id = ia.warehouse_id
+          WHERE ia.product_id = $1
+
+          UNION ALL
+
+          -- 7. Legacy Manual/Initial Batches (fallback)
+          SELECT
+            pb.created_at AS date,
+            'adjustment' AS type,
+            NULL AS entity_name,
+            w.name_ar AS warehouse_name,
+            (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)::float AS quantity,
+            pb.purchase_price::float AS price,
+            pb.id::text AS reference_id,
+            'رصيد أول المدة / دفعة يدوية: ' || COALESCE(pb.source, 'manual_adjustment') AS notes
+          FROM product_batches pb
+          LEFT JOIN warehouses w ON w.id = pb.warehouse_id
+          WHERE pb.product_id = $1 AND pb.source IN ('initial_stock', 'manual_adjustment')
+            AND NOT EXISTS (
+              SELECT 1 FROM inventory_adjustments ia WHERE ia.batch_id = pb.id
+            )
+        ) AS combined_history
+        ORDER BY date DESC
+      `
+      const out = await query(q, [pid])
+      return send(200, out.rows)
+    }
+
     const productStock = path.match(/^\/products\/(\d+)\/stock$/)
     if (method === 'GET' && productStock) {
       await requireAuth(req)
@@ -1743,6 +1890,16 @@ Deno.serve(async (req) => {
          set quantity = product_warehouse_stock.quantity + excluded.quantity`,
         [pid, wid, qty],
       )
+
+      const batchId = Number(out.rows?.[0]?.id)
+      if (batchId) {
+        await query(
+          `insert into inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+           values ($1, $2, $3, 0, $4, $4, $5)`,
+          [pid, wid, batchId, qty, String(body.reason || 'إضافة دفعة يدوية')]
+        )
+      }
+
       return send(200, out.rows?.[0])
     }
 
@@ -1973,6 +2130,14 @@ Deno.serve(async (req) => {
           message: 'لا يمكن تعديل مخزون مباشر لمنتج لديه دُفعات. عدّل الكمية من الدُفعات.',
         })
       }
+
+      const existingStockRow = await query(
+        'select quantity from product_warehouse_stock where product_id = $1 and warehouse_id = $2',
+        [pid, wid]
+      )
+      const oldQty = existingStockRow.rows?.[0] ? Number((existingStockRow.rows[0] as Record<string, unknown>).quantity) : 0
+      const newQty = Math.max(0, oldQty + delta)
+
       await query(
         `insert into product_warehouse_stock (product_id, warehouse_id, quantity)
          values ($1,$2,$3)
@@ -1980,6 +2145,13 @@ Deno.serve(async (req) => {
          set quantity = product_warehouse_stock.quantity + excluded.quantity`,
         [pid, wid, delta],
       )
+
+      await query(
+        `insert into inventory_adjustments (product_id, warehouse_id, old_quantity, new_quantity, quantity_delta, reason)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [pid, wid, oldQty, newQty, delta, 'تعديل مخزون مباشر']
+      )
+
       return send(204, {})
     }
 
@@ -1997,15 +2169,31 @@ Deno.serve(async (req) => {
     if (method === 'PATCH' && patchBatch) {
       await requireAuth(req)
       const id = Number(patchBatch[1])
-      const before = await query('select product_id, warehouse_id from product_batches where id = $1 limit 1', [id])
-      const prev = before.rows?.[0]
+      const before = await query('select product_id, warehouse_id, quantity, kg_remaining, unit_type from product_batches where id = $1 limit 1', [id])
+      const prev = before.rows?.[0] as Record<string, unknown> | undefined
       if (!prev) return send(404, { message: 'الدفعة غير موجودة' })
       const body = await parseJson(req) as Record<string, unknown>
       const fields: string[] = []
       const vals: unknown[] = []
       const add = (k: string, v: unknown) => { vals.push(v); fields.push(`${k} = $${vals.length}`) }
-      if (body.quantity !== undefined) add('quantity', Number(body.quantity))
-      if (body.kg_remaining !== undefined) add('kg_remaining', Number(body.kg_remaining))
+      
+      let oldQty = 0
+      let newQty = 0
+      let isQtyChanged = false
+      const isBulk = prev.unit_type === 'bulk'
+
+      if (body.quantity !== undefined && !isBulk) {
+        add('quantity', Number(body.quantity))
+        oldQty = Number(prev.quantity ?? 0)
+        newQty = Number(body.quantity)
+        isQtyChanged = true
+      }
+      if (body.kg_remaining !== undefined && isBulk) {
+        add('kg_remaining', Number(body.kg_remaining))
+        oldQty = Number(prev.kg_remaining ?? 0)
+        newQty = Number(body.kg_remaining)
+        isQtyChanged = true
+      }
       if (body.purchase_price !== undefined) add('purchase_price', body.purchase_price === null ? null : Number(body.purchase_price))
       if (body.selling_price !== undefined) add('selling_price', body.selling_price === null ? null : Number(body.selling_price))
       if (body.expiry_date !== undefined) add('expiry_date', body.expiry_date)
@@ -2015,12 +2203,24 @@ Deno.serve(async (req) => {
       }
       vals.push(id)
       const out = await query(`update product_batches set ${fields.join(', ')}, updated_at = now() where id = $${vals.length} returning *`, vals)
-      const row = out.rows?.[0]
+      const row = out.rows?.[0] as Record<string, unknown> | undefined
       const productId = Number(row?.product_id ?? prev.product_id)
       const warehouseId = Number(row?.warehouse_id ?? prev.warehouse_id)
       if (Number.isFinite(productId) && Number.isFinite(warehouseId)) {
         await syncWarehouseStockFromBatches(productId, warehouseId)
       }
+
+      if (isQtyChanged) {
+        const delta = newQty - oldQty
+        if (Math.abs(delta) > 0.0001) {
+          await query(
+            `insert into inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+             values ($1, $2, $3, $4, $5, $6, $7)`,
+            [productId, warehouseId, id, oldQty, newQty, delta, String(body.reason || 'تعديل كمية الدفعة يدوياً')]
+          )
+        }
+      }
+
       return send(200, row ?? null)
     }
 
@@ -2028,14 +2228,22 @@ Deno.serve(async (req) => {
     if (method === 'DELETE' && deleteBatch) {
       await requireAuth(req)
       const id = Number(deleteBatch[1])
-      const before = await query('select product_id, warehouse_id from product_batches where id = $1 limit 1', [id])
-      const prev = before.rows?.[0]
+      const before = await query('select product_id, warehouse_id, quantity, kg_remaining, unit_type from product_batches where id = $1 limit 1', [id])
+      const prev = before.rows?.[0] as Record<string, unknown> | undefined
       await query('delete from product_batches where id = $1', [id])
       if (prev) {
         const productId = Number(prev.product_id)
         const warehouseId = Number(prev.warehouse_id)
+        const qty = prev.unit_type === 'bulk' ? Number(prev.kg_remaining ?? 0) : Number(prev.quantity ?? 0)
         if (Number.isFinite(productId) && Number.isFinite(warehouseId)) {
           await syncWarehouseStockFromBatches(productId, warehouseId)
+        }
+        if (qty > 0) {
+          await query(
+            `insert into inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+             values ($1, $2, $3, $4, 0, $5, $6)`,
+            [productId, warehouseId, id, qty, -qty, 'حذف الدفعة']
+          )
         }
       }
       return send(204, {})
@@ -2249,56 +2457,56 @@ Deno.serve(async (req) => {
       const searchId = normalizeArabicNumbers(url.searchParams.get('id') || '')
       const from = (url.searchParams.get('from') || '').trim()
       const to = (url.searchParams.get('to') || '').trim()
-      const where: string[] = [`coalesce(invoice_lifecycle,'active') != 'cancelled'`]
+      const where: string[] = [`coalesce(invoices.invoice_lifecycle,'active') != 'cancelled'`]
       const args: unknown[] = []
       
       console.log(`[GET /invoices] Filters: client=${clientId}, barn=${barnId}, id=${searchId}`)
       const unpaid = url.searchParams.get('unpaid')
       if (unpaid === '1' || unpaid === 'true') {
-        where.push('coalesce(remaining_amount, 0) > 0')
+        where.push('coalesce(invoices.remaining_amount, 0) > 0')
       }
       if (searchId) {
         args.push(`%${searchId}%`)
-        where.push(`cast(id as text) ilike $${args.length}`)
+        where.push(`cast(invoices.id as text) ilike $${args.length}`)
       }
       if (status) {
         args.push(status)
-        where.push(`status = $${args.length}`)
+        where.push(`invoices.status = $${args.length}`)
       }
       if (paymentMethod) {
         if (paymentMethod === 'cash') {
           args.push('cash')
-          where.push(`payment_method = $${args.length}`)
+          where.push(`invoices.payment_method = $${args.length}`)
         } else if (paymentMethod === 'آجل' || paymentMethod === 'credit' || paymentMethod === 'deferred') {
-          where.push(`coalesce(payment_method, '') in ('آجل', 'credit', 'deferred')`)
+          where.push(`coalesce(invoices.payment_method, '') in ('آجل', 'credit', 'deferred')`)
         } else {
           args.push(paymentMethod)
-          where.push(`payment_method = $${args.length}`)
+          where.push(`invoices.payment_method = $${args.length}`)
         }
       }
       if (warehouseId) {
         args.push(Number(warehouseId))
-        where.push(`warehouse_id = $${args.length}`)
+        where.push(`invoices.warehouse_id = $${args.length}`)
       }
       if (clientId) {
         args.push(Number(clientId))
-        where.push(`client_id = $${args.length}`)
+        where.push(`invoices.client_id = $${args.length}`)
       }
       if (barnId) {
         args.push(Number(barnId))
-        where.push(`barn_id = $${args.length}`)
+        where.push(`invoices.barn_id = $${args.length}`)
       }
       if (searchId) {
         args.push(Number(searchId))
-        where.push(`id = $${args.length}`)
+        where.push(`invoices.id = $${args.length}`)
       }
       if (from) {
         args.push(from)
-        where.push(`created_at::date >= $${args.length}::date`)
+        where.push(`invoices.created_at::date >= $${args.length}::date`)
       }
       if (to) {
         args.push(to)
-        where.push(`created_at::date <= $${args.length}::date`)
+        where.push(`invoices.created_at::date <= $${args.length}::date`)
       }
       const whereSql = where.length ? `where ${where.join(' and ')}` : ''
       args.push(limit)
@@ -2584,16 +2792,47 @@ Deno.serve(async (req) => {
     if (method === 'GET' && path === '/payments') {
       await requireAuth(req)
       const limit = Math.min(Number(url.searchParams.get('limit') || 50), 200)
-      const out = await query(
-        `select p.*, c.name as client_name, b.name as barn_name
-         from payments p
-         left join clients c on c.id = p.client_id
-         left join barns b on b.id = p.barn_id
-         where coalesce(p.payment_method, '') in ('cash', 'vodafone_cash', 'instapay')
-         order by p.id desc
-         limit $1`,
-        [limit],
-      )
+      const clientIdParam = url.searchParams.get('client_id')
+      const barnIdParam = url.searchParams.get('barn_id')
+      const paymentMethodParam = url.searchParams.get('payment_method')
+
+      let where = 'WHERE p.invoice_id IS NULL'
+      const params: any[] = []
+      let paramIndex = 1
+
+      if (clientIdParam !== null && clientIdParam !== '') {
+        const clientId = Number(clientIdParam)
+        if (!isNaN(clientId)) {
+          where += ` AND p.client_id = $${paramIndex++}`
+          params.push(clientId)
+        }
+      }
+
+      if (barnIdParam !== null && barnIdParam !== '') {
+        const barnId = Number(barnIdParam)
+        if (!isNaN(barnId)) {
+          where += ` AND p.barn_id = $${paramIndex++}`
+          params.push(barnId)
+        }
+      }
+
+      if (paymentMethodParam !== null && paymentMethodParam !== '') {
+        where += ` AND p.payment_method = $${paramIndex++}`
+        params.push(paymentMethodParam)
+      }
+
+      const sql = `
+        select p.*, c.name as client_name, b.name as barn_name
+        from payments p
+        left join clients c on c.id = p.client_id
+        left join barns b on b.id = p.barn_id
+        ${where}
+        order by p.id desc
+        limit $${paramIndex++}
+      `
+      params.push(limit)
+
+      const out = await query(sql, params)
       return send(200, { data: out.rows, total: out.rows.length })
     }
 

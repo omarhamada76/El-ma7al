@@ -228,3 +228,8 @@ export async function getBagInstance(bagId: number): Promise<BagInstance | null>
     return null
   }
 }
+
+export async function getProductHistory(id: string | number): Promise<any[]> {
+  const res = await api.get<any[]>(`/products/${id}/history`)
+  return Array.isArray(res) ? res : []
+}

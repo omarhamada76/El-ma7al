@@ -773,6 +773,15 @@ const handlers = {
     if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
     send(res, 200, p)
   },
+  'GET /api/v1/products/:id/history': async (req, res, _body, { pathParts }) => {
+    if (!requireAuth(req, res)) return
+    const id = parseInt(pathParts[1], 10)
+    if (!Number.isFinite(id)) return send(res, 400, { message: 'معرف المنتج غير صالح' })
+    const p = await db.getProductById(id)
+    if (!p) return send(res, 404, { message: 'المنتج غير موجود' })
+    const list = await db.getProductHistory(id)
+    send(res, 200, list)
+  },
   'PATCH /api/v1/products/:id': async (req, res, body, { pathParts }) => {
     if (!requireAuth(req, res)) return
     const id = parseInt(pathParts[1], 10)
@@ -1383,6 +1392,7 @@ function routeKey(method, path) {
       parts[2] === 'stock-adjustment' ||
       parts[2] === 'batches' ||
       parts[2] === 'bags' ||
+      parts[2] === 'history' ||
       parts[2] === 'initial-bulk-stock'
     ) {
       return `${method} ${base}/products/:id/${parts[2]}`

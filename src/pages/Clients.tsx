@@ -278,31 +278,6 @@ export default function Clients() {
                             مديون
                           </span>
                         )}
-                        {/* Quick action buttons */}
-                        <button
-                          type="button"
-                          title="سداد سريع"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            navigate(`/payments/new?client_id=${c.id}`)
-                          }}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-primary-50 dark:bg-primary-950/30 text-primary-700 dark:text-primary-300 text-xs font-semibold hover:bg-primary-100 dark:hover:bg-primary-900/40 transition-colors border border-primary-200/60 dark:border-primary-800/40"
-                        >
-                          <CreditCard className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">سداد</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="فاتورة جديدة"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            navigate(`/invoices/new?client_id=${c.id}`)
-                          }}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 text-xs font-semibold hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors border border-emerald-200/60 dark:border-emerald-800/40"
-                        >
-                          <FileText className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">فاتورة</span>
-                        </button>
                       </>
                     )}
                     <ArrowLeft className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Package, Pencil, Trash2, FileText, AlertTriangle } from 'lucide-react'
-import { getProduct, getProductStock, getProductBatches, getProductBags, deleteProduct, updateProduct } from '@/api/products'
+import { getProduct, getProductStock, getProductBatches, getProductBags, deleteProduct, updateProduct, getProductHistory } from '@/api/products'
 import { ApiError } from '@/api/client'
 import { getWarehouses } from '@/api/warehouses'
 import { getCategoryOptions } from '@/api/categories'
@@ -60,6 +60,11 @@ export default function ProductDetail() {
   const { data: categoryOptions = [] } = useQuery({
     queryKey: ['categories', 'options'],
     queryFn: getCategoryOptions,
+  })
+  const { data: history = [], isLoading: historyLoading, error: historyError } = useQuery({
+    queryKey: ['product', id, 'history'],
+    queryFn: () => getProductHistory(id!),
+    enabled: !!id && id !== 'new',
   })
 
   const deleteMutation = useMutation({
@@ -246,6 +251,7 @@ export default function ProductDetail() {
           queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
           queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
           queryClient.invalidateQueries({ queryKey: ['product', id, 'bags'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'history'] })
           queryClient.invalidateQueries({ queryKey: ['product', id] })
           queryClient.invalidateQueries({ queryKey: ['products'] })
           queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -260,6 +266,7 @@ export default function ProductDetail() {
           queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
           queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
           queryClient.invalidateQueries({ queryKey: ['product', id, 'bags'] })
+          queryClient.invalidateQueries({ queryKey: ['product', id, 'history'] })
           queryClient.invalidateQueries({ queryKey: ['products'] })
           queryClient.invalidateQueries({ queryKey: ['dashboard'] })
         }}
@@ -656,6 +663,7 @@ export default function ProductDetail() {
           onSuccess={() => {
             queryClient.invalidateQueries({ queryKey: ['product', id, 'stock'] })
             queryClient.invalidateQueries({ queryKey: ['product', id, 'batches'] })
+            queryClient.invalidateQueries({ queryKey: ['product', id, 'history'] })
             queryClient.invalidateQueries({ queryKey: ['products'] })
             queryClient.invalidateQueries({ queryKey: ['warehouse-stock', stockEdit.warehouseId] })
             queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -708,6 +716,125 @@ export default function ProductDetail() {
           </div>
         </div>
       )}
+      {/* ── Transaction History Section ─────────────────────────── */}
+      <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">سجل حركة المنتج (التتبع المالي والمخزني)</h2>
+        </div>
+        {historyLoading ? (
+          <div className="p-8 text-center text-gray-500">جاري تحميل سجل الحركة...</div>
+        ) : historyError ? (
+          <div className="p-4 text-red-600 bg-red-50 dark:bg-red-950/20 rounded-xl border border-red-200/50 dark:border-red-900/50 text-sm font-medium">
+            حدث خطأ أثناء تحميل سجل الحركة: {historyError instanceof Error ? historyError.message : String(historyError)}
+          </div>
+        ) : history.length === 0 ? (
+          <p className="text-gray-500 dark:text-gray-400 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-600">
+            لا توجد حركات مسجلة لهذا المنتج حتى الآن.
+          </p>
+        ) : (
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 overflow-x-auto bg-white dark:bg-gray-800 shadow-sm">
+            <table className="w-full text-sm min-w-[700px]">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 font-semibold">
+                  <th className="text-right py-3 px-4">التاريخ والوقت</th>
+                  <th className="text-right py-3 px-4">نوع الحركة</th>
+                  <th className="text-right py-3 px-4">المخزن</th>
+                  <th className="text-right py-3 px-4">الكمية / الوزن</th>
+                  <th className="text-right py-3 px-4">الطرف الآخر / الوجهة</th>
+                  <th className="text-right py-3 px-4">البيان / ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                {history.map((row: any, index: number) => {
+                  let badgeColor = 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'
+                  let typeLabel = row.type
+                  let qtyPrefix = ''
+                  let qtyColor = 'text-gray-900 dark:text-gray-100'
+
+                  if (row.type === 'purchase') {
+                    badgeColor = 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/50'
+                    typeLabel = 'استلام من مورد'
+                    qtyPrefix = '+'
+                    qtyColor = 'text-emerald-600 dark:text-emerald-400 font-bold'
+                  } else if (row.type === 'sale') {
+                    badgeColor = 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400 border border-red-100 dark:border-red-900/50'
+                    typeLabel = 'بيع لعميل'
+                    qtyPrefix = ''
+                    qtyColor = 'text-red-600 dark:text-red-400 font-bold'
+                  } else if (row.type === 'transfer_in') {
+                    badgeColor = 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400 border border-blue-100 dark:border-blue-900/50'
+                    typeLabel = 'تحويل (وارد)'
+                    qtyPrefix = '+'
+                    qtyColor = 'text-blue-600 dark:text-blue-400 font-bold'
+                  } else if (row.type === 'transfer_out') {
+                    badgeColor = 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 border border-amber-100 dark:border-amber-900/50'
+                    typeLabel = 'تحويل (صادر)'
+                    qtyPrefix = ''
+                    qtyColor = 'text-amber-600 dark:text-amber-400 font-bold'
+                  } else if (row.type === 'return') {
+                    badgeColor = 'bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-400 border border-purple-100 dark:border-purple-900/50'
+                    typeLabel = 'مرتجع مبيعات'
+                    qtyPrefix = '+'
+                    qtyColor = 'text-purple-600 dark:text-purple-400 font-bold'
+                  } else if (row.type === 'adjustment') {
+                    const isPositive = row.quantity > 0
+                    badgeColor = 'bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400 border border-orange-100 dark:border-orange-900/50'
+                    typeLabel = 'تعديل مخزون'
+                    qtyPrefix = isPositive ? '+' : ''
+                    qtyColor = isPositive 
+                      ? 'text-emerald-600 dark:text-emerald-400 font-bold'
+                      : 'text-red-600 dark:text-red-400 font-bold'
+                  }
+
+                  const formattedDate = new Date(row.date).toLocaleString('ar-EG', {
+                    numberingSystem: 'latn',
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })
+
+                  return (
+                    <tr key={index} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
+                      <td className="py-3 px-4 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        {formattedDate}
+                      </td>
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${badgeColor}`}>
+                          {typeLabel}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 font-medium text-gray-800 dark:text-gray-300">
+                        {row.warehouse_name || '—'}
+                      </td>
+                      <td className={`py-3 px-4 text-right whitespace-nowrap font-mono font-bold ${qtyColor}`} dir="ltr">
+                        {qtyPrefix}{product?.unit_type === 'bulk' ? `${formatNumber(row.quantity, 2)} كجم` : formatNumber(row.quantity, 0)}
+                      </td>
+                      <td className="py-3 px-4 text-gray-700 dark:text-gray-300">
+                        {row.entity_name || '—'}
+                      </td>
+                      <td className="py-3 px-4 text-gray-600 dark:text-gray-400 max-w-xs truncate" title={row.notes}>
+                        {row.reference_id && (row.type === 'sale' || row.type === 'return') ? (
+                          <Link to={`/invoices/${row.reference_id}`} className="text-primary-600 dark:text-primary-400 hover:underline font-medium">
+                            {row.notes ? `${row.notes} (فاتورة #${row.reference_id})` : `فاتورة #${row.reference_id}`}
+                          </Link>
+                        ) : row.reference_id && row.type === 'purchase' ? (
+                          <span>
+                            {row.notes ? `${row.notes} (شراء #${row.reference_id})` : `شراء #${row.reference_id}`}
+                          </span>
+                        ) : (
+                          row.notes || '—'
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

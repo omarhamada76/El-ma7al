@@ -805,7 +805,8 @@ export async function deleteProductBatch(batchId, role) {
     return { ok: false, error: 'لا يمكن حذف الدفعة — مرتبطة بمبيعات مسجّلة' }
   }
   const isBulk = b.unit_type === 'bulk'
-  const hasStock = isBulk ? Number(b.kg_remaining ?? 0) > 0.0001 : Number(b.quantity ?? 0) > 0
+  const qty = isBulk ? Number(b.kg_remaining ?? 0) : Number(b.quantity ?? 0)
+  const hasStock = qty > 0.0001
   if (role !== 'super_admin' && hasStock) {
     return {
       ok: false,
@@ -814,6 +815,17 @@ export async function deleteProductBatch(batchId, role) {
   }
   await pool.query('DELETE FROM product_batches WHERE id = $1', [batchId])
   await syncWarehouseStockFromBatches(b.product_id, b.warehouse_id)
+
+  if (qty > 0) {
+    await pool.query(
+      `
+        INSERT INTO inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+        VALUES ($1, $2, $3, $4, 0, $5, $6)
+      `,
+      [b.product_id, b.warehouse_id, batchId, qty, -qty, `حذف الدفعة بواسطة ${role || 'user'}`]
+    )
+  }
+
   return { ok: true }
 }
 
@@ -823,17 +835,27 @@ export async function updateProductBatch(batchId, body) {
   const sets = []
   const vals = []
   let i = 1
+  let oldQty = 0
+  let newQty = 0
+  let isQtyChanged = false
+
   if (body.quantity !== undefined && b.unit_type !== 'bulk') {
     const n = Number(body.quantity)
     if (!Number.isFinite(n) || n < 0) throw new Error('كمية غير صالحة')
     sets.push(`quantity = $${i++}`)
     vals.push(n)
+    oldQty = Number(b.quantity ?? 0)
+    newQty = n
+    isQtyChanged = true
   }
   if (body.kg_remaining !== undefined && b.unit_type === 'bulk') {
     const n = Number(body.kg_remaining)
     if (!Number.isFinite(n) || n < 0) throw new Error('الكيلوهات غير صالحة')
     sets.push(`kg_remaining = $${i++}`)
     vals.push(n)
+    oldQty = Number(b.kg_remaining ?? 0)
+    newQty = n
+    isQtyChanged = true
   }
   if (body.purchase_price !== undefined) {
     sets.push(`purchase_price = $${i++}`)
@@ -853,6 +875,20 @@ export async function updateProductBatch(batchId, body) {
   await pool.query(`UPDATE product_batches SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`, vals)
   const row = await getBatchById(batchId)
   await syncWarehouseStockFromBatches(row.product_id, row.warehouse_id)
+
+  if (isQtyChanged) {
+    const delta = newQty - oldQty
+    if (Math.abs(delta) > 0.0001) {
+      await pool.query(
+        `
+          INSERT INTO inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [b.product_id, b.warehouse_id, batchId, oldQty, newQty, delta, body.reason || 'تعديل كمية الدفعة يدوياً']
+      )
+    }
+  }
+
   return row
 }
 
@@ -898,6 +934,15 @@ export async function createManualProductBatch(productId, body) {
       )
     }
     await syncWarehouseStockFromBatches(productId, wh)
+
+    await pool.query(
+      `
+        INSERT INTO inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+        VALUES ($1, $2, $3, 0, $4, $4, $5)
+      `,
+      [productId, wh, batchId, totalKg, body.reason || 'إضافة دفعة يدوية']
+    )
+
     return getBatchById(batchId)
   }
 
@@ -913,6 +958,15 @@ export async function createManualProductBatch(productId, body) {
   )
   const batchId = ins.rows[0].id
   await syncWarehouseStockFromBatches(productId, wh)
+
+  await pool.query(
+    `
+      INSERT INTO inventory_adjustments (product_id, warehouse_id, batch_id, old_quantity, new_quantity, quantity_delta, reason)
+      VALUES ($1, $2, $3, 0, $4, $4, $5)
+    `,
+    [productId, wh, batchId, qty, body.reason || 'إضافة دفعة يدوية']
+  )
+
   return getBatchById(batchId)
 }
 
@@ -3026,7 +3080,22 @@ export async function syncWarehouseStockFromBatches(productId, warehouseId) {
 }
 
 export async function upsertProductStock(productId, warehouseId, quantityDelta) {
+  const existingStockRow = await pool.query(
+    'SELECT quantity FROM product_warehouse_stock WHERE product_id = $1 AND warehouse_id = $2',
+    [productId, warehouseId]
+  )
+  const oldQty = existingStockRow.rows[0] ? Number(existingStockRow.rows[0].quantity) : 0
+  const newQty = Math.max(0, oldQty + quantityDelta)
+
   await upsertProductStockWithClient(pool, productId, warehouseId, quantityDelta)
+
+  await pool.query(
+    `
+      INSERT INTO inventory_adjustments (product_id, warehouse_id, old_quantity, new_quantity, quantity_delta, reason)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [productId, warehouseId, oldQty, newQty, quantityDelta, 'تعديل مخزون مباشر']
+  )
 }
 
 async function upsertBatchWithClient(
@@ -4613,4 +4682,147 @@ export async function getInventoryTransfers(limit = 50) {
     ...t,
     items: itemsByTransfer[t.id] ?? [],
   }))
+}
+
+export async function getProductHistory(productId) {
+  const query = `
+    SELECT
+      date,
+      type,
+      entity_name,
+      warehouse_name,
+      quantity,
+      price,
+      reference_id,
+      notes
+    FROM (
+      -- 1. Purchases (inbound from suppliers)
+      SELECT
+        spi.created_at AS date,
+        'purchase' AS type,
+        s.name AS entity_name,
+        w.name_ar AS warehouse_name,
+        (CASE WHEN spi.unit_type = 'bulk' THEN spi.quantity * COALESCE(spi.kg_per_bag, 0) ELSE spi.quantity END)::float AS quantity,
+        spi.unit_price::float AS price,
+        sp.id::text AS reference_id,
+        sp.notes AS notes
+      FROM supplier_purchase_items spi
+      JOIN supplier_purchases sp ON sp.id = spi.supplier_purchase_id
+      LEFT JOIN suppliers s ON s.id = sp.supplier_id
+      LEFT JOIN warehouses w ON w.id = sp.warehouse_id
+      WHERE spi.product_id = $1
+
+      UNION ALL
+
+      -- 2. Sales (outbound to clients)
+      SELECT
+        ii.created_at AS date,
+        'sale' AS type,
+        COALESCE(c.name, i.customer_name) AS entity_name,
+        w.name_ar AS warehouse_name,
+        -ii.quantity::float AS quantity,
+        ii.unit_price::float AS price,
+        i.id::text AS reference_id,
+        i.notes AS notes
+      FROM invoice_items ii
+      JOIN invoices i ON i.id = ii.invoice_id
+      LEFT JOIN clients c ON c.id = i.client_id
+      LEFT JOIN warehouses w ON w.id = i.warehouse_id
+      WHERE ii.product_id = $1 AND COALESCE(i.invoice_lifecycle, 'active') != 'cancelled'
+
+      UNION ALL
+
+      -- 3. Transfers Out (outgoing from source warehouse)
+      SELECT
+        t.created_at AS date,
+        'transfer_out' AS type,
+        w_to.name_ar AS entity_name,
+        w_from.name_ar AS warehouse_name,
+        -ti.quantity::float AS quantity,
+        NULL::float AS price,
+        t.id::text AS reference_id,
+        t.notes AS notes
+      FROM inventory_transfer_items ti
+      JOIN inventory_transfers t ON t.id = ti.transfer_id
+      LEFT JOIN warehouses w_from ON w_from.id = t.from_warehouse_id
+      LEFT JOIN warehouses w_to ON w_to.id = t.to_warehouse_id
+      WHERE ti.product_id = $1
+
+      UNION ALL
+
+      -- 4. Transfers In (incoming to destination warehouse)
+      SELECT
+        t.created_at AS date,
+        'transfer_in' AS type,
+        w_from.name_ar AS entity_name,
+        w_to.name_ar AS warehouse_name,
+        ti.quantity::float AS quantity,
+        NULL::float AS price,
+        t.id::text AS reference_id,
+        t.notes AS notes
+      FROM inventory_transfer_items ti
+      JOIN inventory_transfers t ON t.id = ti.transfer_id
+      LEFT JOIN warehouses w_from ON w_from.id = t.from_warehouse_id
+      LEFT JOIN warehouses w_to ON w_to.id = t.to_warehouse_id
+      WHERE ti.product_id = $1
+
+      UNION ALL
+
+      -- 5. Returns (inbound from clients)
+      SELECT
+        ri.return_date AS date,
+        'return' AS type,
+        COALESCE(c.name, i.customer_name) AS entity_name,
+        w.name_ar AS warehouse_name,
+        ri.returned_quantity::float AS quantity,
+        NULL::float AS price,
+        rd.invoice_id::text AS reference_id,
+        ri.notes AS notes
+      FROM return_items ri
+      JOIN return_documents rd ON rd.id = ri.return_document_id
+      LEFT JOIN invoices i ON i.id = rd.invoice_id
+      LEFT JOIN clients c ON c.id = rd.client_id
+      LEFT JOIN warehouses w ON w.id = i.warehouse_id
+      JOIN invoice_items ii ON ii.id = ri.invoice_item_id
+      WHERE ii.product_id = $1
+
+      UNION ALL
+
+      -- 6. Manual Adjustments
+      SELECT
+        ia.created_at AS date,
+        'adjustment' AS type,
+        NULL AS entity_name,
+        w.name_ar AS warehouse_name,
+        ia.quantity_delta::float AS quantity,
+        NULL::float AS price,
+        NULL AS reference_id,
+        ia.reason AS notes
+      FROM inventory_adjustments ia
+      LEFT JOIN warehouses w ON w.id = ia.warehouse_id
+      WHERE ia.product_id = $1
+
+      UNION ALL
+
+      -- 7. Legacy Manual/Initial Batches (fallback)
+      SELECT
+        pb.created_at AS date,
+        'adjustment' AS type,
+        NULL AS entity_name,
+        w.name_ar AS warehouse_name,
+        (CASE WHEN pb.unit_type = 'bulk' THEN pb.kg_remaining ELSE pb.quantity END)::float AS quantity,
+        pb.purchase_price::float AS price,
+        pb.id::text AS reference_id,
+        'رصيد أول المدة / دفعة يدوية: ' || COALESCE(pb.source, 'manual_adjustment') AS notes
+      FROM product_batches pb
+      LEFT JOIN warehouses w ON w.id = pb.warehouse_id
+      WHERE pb.product_id = $1 AND pb.source IN ('initial_stock', 'manual_adjustment')
+        AND NOT EXISTS (
+          SELECT 1 FROM inventory_adjustments ia WHERE ia.batch_id = pb.id
+        )
+    ) AS combined_history
+    ORDER BY date DESC
+  `
+  const res = await pool.query(query, [productId])
+  return res.rows
 }

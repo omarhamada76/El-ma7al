@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { getRecentInvoices } from '@/api/dashboard'
 import { getClients } from '@/api/clients'
+import { getProducts } from '@/api/products'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import Modal from '@/components/Modal'
@@ -116,6 +117,16 @@ export default function Dashboard() {
   const [accountStatementOpen, setAccountStatementOpen] = useState(false)
   const [clientSearch, setClientSearch] = useState('')
   const [invoicesWindowMode, setInvoicesWindowMode] = useState<InvoicesWindowMode>('minimized')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [isSearchFocused, setIsSearchFocused] = useState(false)
+
+  const { data: searchResults, isLoading: searchLoading } = useQuery({
+    queryKey: ['products', 'search', searchQuery],
+    queryFn: () => getProducts({ search: searchQuery, limit: 10 }),
+    enabled: searchQuery.trim().length >= 2,
+  })
+  const productsList = searchResults?.data ?? []
+
   const { data: recentInvoices = [], isLoading: invoicesLoading } = useQuery({
     queryKey: ['invoices', 'recent'],
     queryFn: getRecentInvoices,
@@ -360,11 +371,11 @@ export default function Dashboard() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
-          {/* Laser Scanner HUD */}
-          <div className="rounded-2xl border border-gray-200/60 dark:border-gray-700/60 bg-white/60 dark:bg-gray-800/60 backdrop-blur-sm p-4 shadow-sm">
+          {/* Laser Scanner HUD / Quick Search */}
+          <div className="relative rounded-2xl border border-gray-200/60 dark:border-gray-700/60 bg-white/60 dark:bg-gray-800/60 backdrop-blur-sm p-4 shadow-sm">
             <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-3 flex items-center gap-2">
               <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
-              امسح الباركود لفتح فاتورة جديدة
+              البحث السريع أو مسح الباركود
             </p>
             {/* Scanner field with laser sweep animation */}
             <div className="relative overflow-hidden rounded-xl border-2 border-dashed border-red-400/40 dark:border-red-500/30 bg-gradient-to-b from-red-50/30 to-transparent dark:from-red-950/10">
@@ -372,17 +383,68 @@ export default function Dashboard() {
               <input
                 type="text"
                 data-scanner-input="true"
-                placeholder="امسح الباركود هنا..."
-                className="relative z-10 w-full bg-transparent px-4 py-3.5 text-sm text-center font-mono placeholder:text-gray-400/70 focus:outline-none focus:ring-0 border-0"
-                lang="en"
-                dir="ltr"
-                inputMode="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (productsList.length > 0) {
+                      navigate(`/inventory/products/${productsList[0].id}`)
+                    } else if (searchQuery.trim().length > 0) {
+                      navigate(`/inventory?search=${encodeURIComponent(searchQuery)}`)
+                    }
+                  }
+                }}
+                placeholder="ابحث بالاسم، الباركود أو رقم الدفعة..."
+                className="relative z-10 w-full bg-transparent px-4 py-3.5 text-sm text-center placeholder:text-gray-400/70 focus:outline-none focus:ring-0 border-0"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
               />
             </div>
-            <p className="mt-2 text-xs text-center text-gray-400 dark:text-gray-500">الباركود يُكتشف تلقائياً من القارئ</p>
+            {/* Search Results Dropdown */}
+            {isSearchFocused && searchQuery.trim().length >= 2 && (
+              <div className="absolute left-0 right-0 top-full mt-2 z-50 max-h-80 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-gray-100 dark:divide-gray-700">
+                {searchLoading ? (
+                  <div className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">جاري البحث...</div>
+                ) : productsList.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">لا توجد نتائج مطابقة</div>
+                ) : (
+                  productsList.map((p) => {
+                    const displayStock = p.batch_total_quantity ?? p.warehouse_stock ?? 0
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => navigate(`/inventory/products/${p.id}`)}
+                        className="w-full text-right px-4 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-bold text-gray-900 dark:text-white truncate">{p.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                            {p.company && <span>{p.company}</span>}
+                            {p.barcode && <span className="font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded">{p.barcode}</span>}
+                            <span>#{p.id}</span>
+                          </div>
+                        </div>
+                        <div className="text-left shrink-0">
+                          <p className="text-sm font-semibold text-primary-600 dark:text-primary-400">
+                            {p.selling_price > 0 ? formatCurrency(p.selling_price) : 'بدون سعر'}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                            المخزون: <span className="font-semibold">{p.unit_type === 'bulk' ? `${displayStock} كجم` : displayStock}</span>
+                          </p>
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            )}
+            <p className="mt-2 text-xs text-center text-gray-400 dark:text-gray-500">
+              {searchQuery.trim().length >= 2 ? 'اضغط Enter للذهاب لأول نتيجة' : 'الباركود يُكتشف تلقائياً من القارئ'}
+            </p>
           </div>
           <Modal
             open={accountStatementOpen}
