@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { Supplier, SupplierPurchase, SupplierPurchaseWithItems, SupplierPayment } from '@/types/api'
+import type { Supplier, SupplierPurchase, SupplierPurchaseWithItems, SupplierPayment, AccountStatement } from '@/types/api'
 
 export interface SuppliersParams {
   page?: number
@@ -66,4 +66,15 @@ export async function updateSupplier(id: string, body: Partial<Supplier>): Promi
 
 export async function deleteSupplier(id: string): Promise<void> {
   return api.delete(`/suppliers/${id}`)
+}
+
+export async function getSupplierAccountStatement(
+  id: string,
+  params: { from?: string; to?: string } = {}
+): Promise<AccountStatement> {
+  const q = new URLSearchParams()
+  if (params.from) q.set('from', params.from)
+  if (params.to) q.set('to', params.to)
+  const queryStr = q.toString() ? `?${q}` : ''
+  return api.get(`/suppliers/${id}/statement${queryStr}`)
 }

@@ -638,6 +638,199 @@ async function buildAccountStatement(params: {
   return { opening_balance: opening, closing_balance: runningBalance, rows: outRows }
 }
 
+async function buildSupplierAccountStatement(params: {
+  supplierId: number
+  from?: string
+  to?: string
+}) {
+  const { supplierId } = params
+  const from = params.from?.trim()
+  const to = params.to?.trim()
+  const baseArgs: unknown[] = [supplierId]
+  
+  const wherePurchasesBase: string[] = ["sp.supplier_id = $1"]
+  const wherePaymentsBase: string[] = ["p.supplier_id = $1"]
+  
+  const rangeArgs = [...baseArgs]
+  const wherePurchases = [...wherePurchasesBase]
+  const wherePayments = [...wherePaymentsBase]
+  
+  if (from) {
+    rangeArgs.push(from)
+    wherePurchases.push(`sp.created_at::date >= $${rangeArgs.length}::date`)
+    wherePayments.push(`p.payment_date::date >= $${rangeArgs.length}::date`)
+  }
+  if (to) {
+    rangeArgs.push(to)
+    wherePurchases.push(`sp.created_at::date <= $${rangeArgs.length}::date`)
+    wherePayments.push(`p.payment_date::date <= $${rangeArgs.length}::date`)
+  }
+
+  let opening = 0
+  const openingArgs = [...baseArgs]
+  if (from) {
+    openingArgs.push(from)
+    const cutoffPos = openingArgs.length
+    const openPurchases = await query(
+      `select coalesce(sum(sp.total_amount),0) as s
+       from supplier_purchases sp
+       where ${wherePurchasesBase.join(' and ')} and sp.created_at::date < $${cutoffPos}::date`,
+      openingArgs,
+    )
+    const openPayments = await query(
+      `select coalesce(sum(p.amount),0) as s
+       from supplier_payments p
+       where ${wherePaymentsBase.join(' and ')} and p.payment_date::date < $${cutoffPos}::date`,
+      openingArgs,
+    )
+    opening += Number(openPurchases.rows?.[0]?.s ?? 0) - Number(openPayments.rows?.[0]?.s ?? 0)
+  }
+
+  const purchasesQuery = await query(
+    `select sp.id as purchase_id, sp.created_at, sp.total_amount, sp.notes
+     from supplier_purchases sp
+     where ${wherePurchases.join(' and ')}
+     order by sp.created_at asc, sp.id asc`,
+    rangeArgs,
+  )
+  const paymentsQuery = await query(
+    `select p.id as payment_id, p.payment_date, p.created_at, p.amount, p.payment_method, p.notes
+     from supplier_payments p
+     where ${wherePayments.join(' and ')}
+     order by p.payment_date asc, p.id asc`,
+    rangeArgs,
+  )
+
+  const purchaseRows = purchasesQuery.rows as Array<Record<string, unknown>>
+  const purchaseIds = purchaseRows.map((r) => Number(r.purchase_id)).filter((id) => Number.isFinite(id))
+  const itemsByPurchase = new Map<number, Array<{ product_name: string; quantity: number; total_price: number; unit_price: number }>>()
+  if (purchaseIds.length > 0) {
+    const itemOut = await query(
+      `select spi.supplier_purchase_id, spi.quantity, spi.unit_price, spi.total_price, coalesce(pr.name, 'منتج') as product_name
+       from supplier_purchase_items spi
+       left join products pr on pr.id = spi.product_id
+       where spi.supplier_purchase_id = any($1::int[])`,
+      [purchaseIds],
+    )
+    for (const it of itemOut.rows as Array<Record<string, unknown>>) {
+      const pid = Number(it.supplier_purchase_id)
+      if (!itemsByPurchase.has(pid)) itemsByPurchase.set(pid, [])
+      itemsByPurchase.get(pid)!.push({
+        product_name: String(it.product_name ?? ''),
+        quantity: Number(it.quantity) || 0,
+        unit_price: Number(it.unit_price) || 0,
+        total_price: Number(it.total_price) || 0,
+      })
+    }
+  }
+
+  const merged: Array<Record<string, unknown>> = [
+    ...purchaseRows.map((p) => {
+      const pid = Number(p.purchase_id)
+      const items = itemsByPurchase.get(pid) || []
+      return {
+        date: p.created_at,
+        sort_at: p.created_at,
+        type: 'invoice',
+        description: `فاتورة شراء #${pid}`,
+        debit: Number(p.total_amount ?? 0),
+        credit: 0,
+        display_debit: Number(p.total_amount ?? 0),
+        display_credit: 0,
+        purchase_id: pid,
+        invoice_id: null,
+        invoice_total: Number(p.total_amount ?? 0),
+        items,
+        ledger_skip: false,
+      }
+    }),
+    ...(paymentsQuery.rows as Array<Record<string, unknown>>).map((p) => {
+      const amt = Number(p.amount ?? 0)
+      const desc = formatPaymentDescriptionArStatement(amt, p.payment_method)
+      return {
+        date: p.payment_date || p.created_at,
+        sort_at: p.created_at || p.payment_date,
+        type: 'payment',
+        description: desc,
+        debit: 0,
+        credit: amt,
+        display_debit: 0,
+        display_credit: amt,
+        payment_id: Number(p.payment_id),
+        payment_amount: amt,
+        payment_method: p.payment_method,
+        ledger_skip: false,
+      }
+    }),
+  ]
+
+  merged.sort((a, b) => {
+    const aTs = new Date(String(a.sort_at ?? a.date)).getTime()
+    const bTs = new Date(String(b.sort_at ?? b.date)).getTime()
+    if (aTs !== bTs) return aTs - bTs
+    const aType = a.type === 'invoice' ? 0 : 1
+    const bType = b.type === 'invoice' ? 0 : 1
+    if (aType !== bType) return aType - bType
+    const aId = a.type === 'invoice' ? Number(a.purchase_id ?? 0) : Number(a.payment_id ?? 0)
+    const bId = b.type === 'invoice' ? Number(b.purchase_id ?? 0) : Number(b.payment_id ?? 0)
+    return aId - bId
+  })
+
+  const outRows: Array<Record<string, unknown>> = []
+  let runningBalance = opening
+  let rowSeq = 0
+  for (const m of merged) {
+    rowSeq += 1
+    const amountForRow = statementDisplayAmountEdge(m as { type: string; debit?: unknown; credit?: unknown; display_debit?: unknown; display_credit?: unknown })
+    if (m.type === 'invoice') {
+      runningBalance += amountForRow
+    } else {
+      runningBalance -= amountForRow
+    }
+    const direction = m.type === 'invoice' ? 'debit' : 'credit'
+    
+    let qpu = { quantity: null as number | null, unit_price: null as number | null }
+    if (m.type === 'invoice') {
+      const items = (m.items as Array<{ quantity?: unknown; total_price?: unknown }>) || []
+      const sumQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0)
+      if (sumQty > 0) {
+        if (items.length === 1) {
+          const tp = Number(items[0].total_price) || 0
+          const q = Number(items[0].quantity) || 0
+          qpu = { quantity: sumQty, unit_price: q > 0 ? tp / q : null }
+        } else {
+          qpu = { quantity: sumQty, unit_price: null }
+        }
+      }
+    }
+
+    const row: Record<string, unknown> = {
+      id: rowSeq,
+      date: toYmd(String(m.date ?? '')),
+      sort_at: String(m.sort_at ?? m.date ?? ''),
+      type: m.type,
+      description: m.description,
+      quantity: qpu.quantity,
+      unit_price: qpu.unit_price,
+      amount: amountForRow,
+      direction,
+      running_balance: runningBalance,
+    }
+    if (m.type === 'invoice') {
+      row.purchase_id = m.purchase_id
+      row.invoice_id = null
+      const items = m.items as unknown[] | undefined
+      if (items && items.length) row.items = items
+    } else {
+      row.payment_id = m.payment_id
+      if (m.payment_method) row.payment_method = m.payment_method
+    }
+    outRows.push(row)
+  }
+
+  return { opening_balance: opening, closing_balance: runningBalance, rows: outRows }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
@@ -3124,6 +3317,28 @@ Deno.serve(async (req) => {
         args,
       )
       return send(200, { data: out.rows })
+    }
+
+    const supplierStmt = path.match(/^\/suppliers\/(\d+)\/account-statement$/)
+    if (method === 'GET' && supplierStmt) {
+      await requireAuth(req)
+      const data = await buildSupplierAccountStatement({
+        supplierId: Number(supplierStmt[1]),
+        from: url.searchParams.get('from') || undefined,
+        to: url.searchParams.get('to') || undefined,
+      })
+      return send(200, data)
+    }
+
+    const supplierStatement = path.match(/^\/suppliers\/(\d+)\/statement$/)
+    if (method === 'GET' && supplierStatement) {
+      await requireAuth(req)
+      const data = await buildSupplierAccountStatement({
+        supplierId: Number(supplierStatement[1]),
+        from: url.searchParams.get('from') || undefined,
+        to: url.searchParams.get('to') || undefined,
+      })
+      return send(200, data)
     }
 
     const clientStmt = path.match(/^\/clients\/(\d+)\/account-statement$/)

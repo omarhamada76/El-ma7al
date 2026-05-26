@@ -380,19 +380,21 @@ function downloadPdfBlob(pdfBlob: Blob, filename: string): void {
 export async function downloadStatementPdf(
   pdfBlob: Blob,
   clientName: string,
+  isSupplier?: boolean,
 ): Promise<void> {
-  const filename = `كشف-حساب-${clientName}.pdf`
+  const filename = `كشف-حساب-${isSupplier ? 'المورد-' : ''}${clientName}.pdf`
   downloadPdfBlob(pdfBlob, filename)
 }
 
 export async function shareStatementToWhatsApp(
   pdfBlob: Blob,
   clientName: string,
-  options?: { phone?: string | null; from?: string; to?: string },
+  options?: { phone?: string | null; from?: string; to?: string; isSupplier?: boolean },
 ): Promise<void> {
-  const filename = `كشف-حساب-${clientName}.pdf`
+  const isSupplier = !!options?.isSupplier
+  const filename = `كشف-حساب-${isSupplier ? 'المورد-' : ''}${clientName}.pdf`
   const period = options?.from && options?.to ? ` (${options.from} — ${options.to})` : ''
-  const caption = `كشف حساب العميل: ${clientName}${period} — ${SHOP_NAME}`
+  const caption = `كشف حساب ${isSupplier ? 'المورد' : 'العميل'}: ${clientName}${period} — ${SHOP_NAME}`
   const phone = normalizeWhatsAppPhone(options?.phone)
   const file = new File([pdfBlob], filename, { type: 'application/pdf' })
 
