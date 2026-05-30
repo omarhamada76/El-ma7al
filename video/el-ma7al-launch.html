@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, height=1080" />
+  <title>المحل — الصيدلية البيطرية المتكاملة | إطلاق المنتج</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --teal-400: #2dd4bf;
+      --teal-500: #14b8a6;
+      --teal-600: #0d9488;
+      --teal-700: #0f766e;
+      --navy-900: #0a1628;
+      --navy-800: #0f2340;
+      --navy-700: #1e3a5f;
+      --navy-600: #1d4ed8;
+      --slate-200: #e2e8f0;
+      --slate-300: #cbd5e1;
+      --slate-400: #94a3b8;
+      --white: #ffffff;
+      --gold: #f59e0b;
+      --red: #ef4444;
+      --green: #22c55e;
+      --scene-w: 1920px;
+      --scene-h: 1080px;
+    }
+
+    html, body {
+      width: var(--scene-w);
+      height: var(--scene-h);
+      overflow: hidden;
+      background: #000;
+      font-family: 'IBM Plex Sans Arabic', sans-serif;
+    }
+
+    #video-container {
+      width: var(--scene-w);
+      height: var(--scene-h);
+      position: relative;
+      overflow: hidden;
+      background: var(--navy-900);
+    }
+
+    /* ===== BACKGROUND ===== */
+    .bg-gradient {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 120% 80% at 50% 110%, rgba(13,148,136,0.18) 0%, transparent 60%),
+                  radial-gradient(ellipse 80% 60% at 80% 20%, rgba(30,58,95,0.5) 0%, transparent 50%),
+                  linear-gradient(160deg, #0a1628 0%, #0f2340 50%, #0a1628 100%);
+    }
+
+    .bg-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(45,212,191,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(45,212,191,0.04) 1px, transparent 1px);
+      background-size: 60px 60px;
+      opacity: 0;
+      animation: gridFadeIn 1s ease 0.5s forwards;
+    }
+
+    @keyframes gridFadeIn {
+      to { opacity: 1; }
+    }
+
+    /* Floating particles */
+    .particle {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(45,212,191,0.5);
+      animation: float linear infinite;
+      pointer-events: none;
+    }
+
+    @keyframes float {
+      0% { transform: translateY(0) scale(1); opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 0.5; }
+      100% { transform: translateY(-1200px) scale(0.3); opacity: 0; }
+    }
+
+    /* ===== SCENE MANAGEMENT ===== */
+    .scene {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Scene 1: Intro / Hook (0-4s) */
+    #scene-1 { animation: sceneIn 0.6s ease 0.2s forwards, sceneOut 0.5s ease 4.0s forwards; }
+
+    /* Scene 2: Problem (4-8s) */
+    #scene-2 { animation: sceneIn 0.6s ease 4.5s forwards, sceneOut 0.5s ease 8.0s forwards; }
+
+    /* Scene 3: Feature 1 - Inventory (8-12s) */
+    #scene-3 { animation: sceneIn 0.6s ease 8.5s forwards, sceneOut 0.5s ease 12.0s forwards; }
+
+    /* Scene 4: Feature 2 - Sales (12-16s) */
+    #scene-4 { animation: sceneIn 0.6s ease 12.5s forwards, sceneOut 0.5s ease 16.0s forwards; }
+
+    /* Scene 5: CTA / Logo (16-20s) */
+    #scene-5 { animation: sceneIn 0.6s ease 16.5s forwards; }
+
+    @keyframes sceneIn {
+      from { opacity: 0; transform: scale(0.98); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    @keyframes sceneOut {
+      from { opacity: 1; transform: scale(1); }
+      to   { opacity: 0; transform: scale(1.02); }
+    }
+
+    /* ===== SCENE 1: HERO ===== */
+    #scene-1 .hero-logo-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 32px;
+      animation: heroZoom 4s ease forwards;
+    }
+
+    @keyframes heroZoom {
+      0%   { transform: scale(0.6); opacity: 0; }
+      30%  { transform: scale(1.05); opacity: 1; }
+      60%  { transform: scale(1); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .logo-circle {
+      width: 220px;
+      height: 220px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--navy-800), var(--navy-700));
+      border: 3px solid rgba(45,212,191,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      box-shadow: 0 0 60px rgba(45,212,191,0.3), 0 0 120px rgba(45,212,191,0.1);
+      animation: logoPulse 2s ease-in-out infinite 1s;
+    }
+
+    @keyframes logoPulse {
+      0%, 100% { box-shadow: 0 0 60px rgba(45,212,191,0.3), 0 0 120px rgba(45,212,191,0.1); }
+      50% { box-shadow: 0 0 80px rgba(45,212,191,0.5), 0 0 160px rgba(45,212,191,0.2); }
+    }
+
+    .logo-icon {
+      width: 140px;
+      height: 140px;
+      object-fit: contain;
+      filter: drop-shadow(0 4px 20px rgba(45,212,191,0.4));
+    }
+
+    .logo-ring {
+      position: absolute;
+      inset: -12px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      border-top-color: var(--teal-500);
+      border-right-color: var(--teal-400);
+      animation: spin 3s linear infinite;
+    }
+    .logo-ring-2 {
+      position: absolute;
+      inset: -24px;
+      border-radius: 50%;
+      border: 1.5px solid transparent;
+      border-bottom-color: rgba(45,212,191,0.4);
+      border-left-color: rgba(45,212,191,0.2);
+      animation: spin 5s linear infinite reverse;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .hero-title {
+      font-size: 96px;
+      font-weight: 800;
+      color: var(--white);
+      letter-spacing: -2px;
+      line-height: 1;
+      text-align: center;
+      background: linear-gradient(135deg, #fff 0%, var(--teal-400) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: titleSlideIn 0.8s ease 0.5s both;
+    }
+
+    .hero-subtitle {
+      font-size: 32px;
+      font-weight: 400;
+      color: var(--slate-300);
+      text-align: center;
+      animation: titleSlideIn 0.8s ease 0.8s both;
+    }
+
+    @keyframes titleSlideIn {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero-tagline {
+      font-size: 22px;
+      font-weight: 300;
+      color: var(--teal-400);
+      text-align: center;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      animation: titleSlideIn 0.8s ease 1.1s both;
+    }
+
+    /* ===== SCENE 2: PROBLEM ===== */
+    #scene-2 {
+      flex-direction: column;
+      gap: 60px;
+    }
+
+    .problem-hook {
+      font-size: 52px;
+      font-weight: 700;
+      color: var(--white);
+      text-align: center;
+      line-height: 1.3;
+      max-width: 1000px;
+      animation: slideUp 0.7s ease 4.7s both;
+    }
+
+    .problem-hook em {
+      font-style: normal;
+      color: var(--teal-400);
+    }
+
+    .chaos-cards {
+      display: flex;
+      gap: 40px;
+      justify-content: center;
+    }
+
+    .chaos-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 32px 40px;
+      text-align: center;
+      width: 260px;
+      backdrop-filter: blur(20px);
+    }
+
+    .chaos-card:nth-child(1) { animation: cardIn 0.5s ease 5.0s both; }
+    .chaos-card:nth-child(2) { animation: cardIn 0.5s ease 5.3s both; }
+    .chaos-card:nth-child(3) { animation: cardIn 0.5s ease 5.6s both; }
+
+    @keyframes cardIn {
+      from { opacity: 0; transform: translateY(40px) scale(0.95); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .chaos-icon {
+      font-size: 52px;
+      display: block;
+      margin-bottom: 16px;
+    }
+
+    .chaos-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--slate-200);
+      margin-bottom: 8px;
+    }
+
+    .chaos-desc {
+      font-size: 15px;
+      color: var(--slate-400);
+    }
+
+    .problem-stat {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 16px;
+      padding: 20px 40px;
+      animation: slideUp 0.5s ease 6.2s both;
+    }
+
+    .problem-stat .stat-icon { font-size: 36px; }
+    .problem-stat .stat-text { font-size: 22px; color: #fca5a5; font-weight: 500; }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ===== SCENE 3: INVENTORY FEATURE ===== */
+    #scene-3 {
+      flex-direction: row;
+      gap: 120px;
+      padding: 0 120px;
+      align-items: center;
+    }
+
+    .feature-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--teal-400);
+      letter-spacing: 5px;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+      animation: slideUp 0.5s ease 8.7s both;
+    }
+
+    .feature-title {
+      font-size: 64px;
+      font-weight: 800;
+      color: var(--white);
+      line-height: 1.1;
+      margin-bottom: 24px;
+      animation: slideUp 0.5s ease 8.9s both;
+    }
+
+    .feature-title span { color: var(--teal-400); }
+
+    .feature-desc {
+      font-size: 22px;
+      color: var(--slate-300);
+      line-height: 1.6;
+      max-width: 520px;
+      animation: slideUp 0.5s ease 9.1s both;
+    }
+
+    .feature-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+      animation: slideUp 0.5s ease 9.3s both;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(45,212,191,0.1);
+      border: 1px solid rgba(45,212,191,0.3);
+      border-radius: 100px;
+      padding: 8px 20px;
+      font-size: 16px;
+      color: var(--teal-400);
+      font-weight: 500;
+    }
+
+    .pill-icon { font-size: 18px; }
+
+    /* Dashboard mockup */
+    .dash-mockup {
+      width: 720px;
+      min-width: 720px;
+      height: 480px;
+      background: rgba(15,35,64,0.9);
+      border: 1px solid rgba(45,212,191,0.2);
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 40px 120px rgba(0,0,0,0.5), 0 0 60px rgba(45,212,191,0.1);
+      animation: dashIn 0.8s ease 8.8s both;
+      position: relative;
+    }
+
+    @keyframes dashIn {
+      from { opacity: 0; transform: perspective(1000px) rotateY(15deg) scale(0.9); }
+      to   { opacity: 1; transform: perspective(1000px) rotateY(0deg) scale(1); }
+    }
+
+    .dash-header {
+      background: rgba(45,212,191,0.08);
+      border-bottom: 1px solid rgba(45,212,191,0.15);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .dash-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dash-dot-red { background: #ef4444; }
+    .dash-dot-yellow { background: #f59e0b; }
+    .dash-dot-green { background: #22c55e; }
+
+    .dash-title-bar {
+      flex: 1;
+      text-align: center;
+      font-size: 13px;
+      color: var(--slate-400);
+      font-weight: 500;
+    }
+
+    .dash-body {
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Inventory table */
+    .inv-table-header {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 0;
+      background: rgba(45,212,191,0.06);
+      border-radius: 8px;
+      padding: 10px 16px;
+      margin-bottom: 4px;
+    }
+
+    .inv-th {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--teal-400);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .inv-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 0;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      align-items: center;
+      animation: rowIn 0.4s ease both;
+    }
+
+    .inv-row:nth-child(1) { animation-delay: 9.2s; }
+    .inv-row:nth-child(2) { animation-delay: 9.4s; }
+    .inv-row:nth-child(3) { animation-delay: 9.6s; }
+    .inv-row:nth-child(4) { animation-delay: 9.8s; }
+
+    @keyframes rowIn {
+      from { opacity: 0; transform: translateX(-20px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    .inv-row:hover { background: rgba(45,212,191,0.05); }
+
+    .inv-name { font-size: 14px; color: var(--slate-200); font-weight: 500; }
+    .inv-qty { font-size: 14px; color: var(--white); font-weight: 700; }
+    .inv-price { font-size: 14px; color: var(--teal-400); font-weight: 600; }
+
+    .inv-badge {
+      display: inline-flex;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge-ok { background: rgba(34,197,94,0.15); color: #86efac; border: 1px solid rgba(34,197,94,0.3); }
+    .badge-low { background: rgba(245,158,11,0.15); color: #fcd34d; border: 1px solid rgba(245,158,11,0.3); }
+    .badge-out { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+
+    /* Alert bar */
+    .inv-alert {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(245,158,11,0.1);
+      border: 1px solid rgba(245,158,11,0.3);
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-top: 8px;
+      font-size: 13px;
+      color: #fcd34d;
+      animation: alertPulse 2s ease-in-out infinite 10s;
+    }
+
+    @keyframes alertPulse {
+      0%, 100% { border-color: rgba(245,158,11,0.3); }
+      50% { border-color: rgba(245,158,11,0.7); }
+    }
+
+    /* ===== SCENE 4: SALES FEATURE ===== */
+    #scene-4 {
+      flex-direction: row;
+      gap: 80px;
+      padding: 0 120px;
+      align-items: center;
+    }
+
+    .sales-dash {
+      width: 680px;
+      min-width: 680px;
+      height: 500px;
+      background: rgba(15,35,64,0.9);
+      border: 1px solid rgba(45,212,191,0.2);
+      border-radius: 24px;
+      overflow: hidden;
+      box-shadow: 0 40px 120px rgba(0,0,0,0.5), 0 0 60px rgba(45,212,191,0.1);
+      animation: dashIn 0.8s ease 12.7s both;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 20px;
+    }
+
+    .stat-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 20px;
+      animation: cardIn 0.5s ease both;
+    }
+
+    .stat-card:nth-child(1) { animation-delay: 13.0s; }
+    .stat-card:nth-child(2) { animation-delay: 13.2s; }
+    .stat-card:nth-child(3) { animation-delay: 13.4s; }
+    .stat-card:nth-child(4) { animation-delay: 13.6s; }
+
+    .stat-card-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--slate-400);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+
+    .stat-card-value {
+      font-size: 36px;
+      font-weight: 800;
+      color: var(--white);
+      line-height: 1;
+    }
+
+    .stat-card-value.teal { color: var(--teal-400); }
+    .stat-card-value.gold { color: var(--gold); }
+    .stat-card-value.green { color: var(--green); }
+
+    .stat-card-change {
+      font-size: 13px;
+      color: #86efac;
+      margin-top: 6px;
+      font-weight: 600;
+    }
+
+    /* Chart bars */
+    .chart-area {
+      padding: 0 20px 20px;
+    }
+
+    .chart-title {
+      font-size: 12px;
+      color: var(--slate-400);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 12px;
+      font-weight: 700;
+    }
+
+    .chart-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      height: 100px;
+    }
+
+    .chart-bar-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+
+    .chart-bar {
+      width: 100%;
+      border-radius: 6px 6px 0 0;
+      background: linear-gradient(to top, var(--teal-700), var(--teal-400));
+      transition: height 0.5s ease;
+      animation: barGrow 0.6s ease both;
+      transform-origin: bottom;
+    }
+
+    .chart-bar:nth-child(1) { animation-delay: 13.8s; }
+
+    .chart-bar-wrap:nth-child(1) .chart-bar { animation-delay: 13.8s; height: 50px; }
+    .chart-bar-wrap:nth-child(2) .chart-bar { animation-delay: 13.9s; height: 70px; }
+    .chart-bar-wrap:nth-child(3) .chart-bar { animation-delay: 14.0s; height: 60px; }
+    .chart-bar-wrap:nth-child(4) .chart-bar { animation-delay: 14.1s; height: 85px; }
+    .chart-bar-wrap:nth-child(5) .chart-bar { animation-delay: 14.2s; height: 65px; }
+    .chart-bar-wrap:nth-child(6) .chart-bar { animation-delay: 14.3s; height: 95px; background: linear-gradient(to top, var(--teal-600), #2dd4bf, #99f6e4); }
+    .chart-bar-wrap:nth-child(7) .chart-bar { animation-delay: 14.4s; height: 75px; }
+
+    @keyframes barGrow {
+      from { transform: scaleY(0); opacity: 0; }
+      to   { transform: scaleY(1); opacity: 1; }
+    }
+
+    .chart-label {
+      font-size: 10px;
+      color: var(--slate-400);
+      text-align: center;
+    }
+
+    /* ===== SCENE 5: CTA ===== */
+    #scene-5 {
+      flex-direction: column;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .cta-logo-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      animation: ctaLogoIn 0.8s ease 17.0s both;
+    }
+
+    @keyframes ctaLogoIn {
+      from { opacity: 0; transform: translateY(-40px) scale(0.8); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .cta-logo-small {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--navy-800), var(--navy-700));
+      border: 2px solid rgba(45,212,191,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 50px rgba(45,212,191,0.4);
+    }
+
+    .cta-logo-img {
+      width: 80px;
+      height: 80px;
+      object-fit: contain;
+    }
+
+    .cta-title {
+      font-size: 80px;
+      font-weight: 800;
+      color: var(--white);
+      text-align: center;
+      background: linear-gradient(135deg, #fff 0%, var(--teal-400) 60%, var(--teal-600) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: ctaLogoIn 0.8s ease 17.2s both;
+    }
+
+    .cta-sub {
+      font-size: 28px;
+      color: var(--slate-300);
+      text-align: center;
+      animation: ctaLogoIn 0.8s ease 17.4s both;
+    }
+
+    .cta-features-row {
+      display: flex;
+      gap: 32px;
+      animation: ctaLogoIn 0.8s ease 17.6s both;
+    }
+
+    .cta-feature-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(45,212,191,0.08);
+      border: 1px solid rgba(45,212,191,0.25);
+      border-radius: 100px;
+      padding: 12px 28px;
+      font-size: 18px;
+      color: var(--slate-200);
+      font-weight: 500;
+    }
+
+    .chip-icon { font-size: 22px; }
+
+    .cta-url {
+      font-size: 26px;
+      color: var(--teal-400);
+      font-weight: 600;
+      letter-spacing: 1px;
+      animation: ctaLogoIn 0.8s ease 17.8s both;
+      border: 1.5px solid rgba(45,212,191,0.3);
+      border-radius: 12px;
+      padding: 14px 40px;
+      background: rgba(45,212,191,0.06);
+    }
+
+    .cta-tagline {
+      font-size: 20px;
+      color: var(--slate-400);
+      text-align: center;
+      animation: ctaLogoIn 0.8s ease 18.0s both;
+    }
+
+    /* ===== TRANSITION FLASH ===== */
+    .scene-flash {
+      position: absolute;
+      inset: 0;
+      background: var(--teal-400);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 100;
+    }
+
+    .flash-1 { animation: flash 0.3s ease 4.1s; }
+    .flash-2 { animation: flash 0.3s ease 8.2s; }
+    .flash-3 { animation: flash 0.3s ease 12.2s; }
+    .flash-4 { animation: flash 0.3s ease 16.2s; }
+
+    @keyframes flash {
+      0%   { opacity: 0; }
+      20%  { opacity: 0.08; }
+      100% { opacity: 0; }
+    }
+
+    /* ===== COUNTDOWN BAR ===== */
+    .progress-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--teal-600), var(--teal-400));
+      animation: progress 20s linear forwards;
+      box-shadow: 0 0 10px var(--teal-400);
+    }
+
+    @keyframes progress {
+      from { width: 0%; }
+      to   { width: 100%; }
+    }
+
+    /* ===== SCENE NUMBER INDICATOR ===== */
+    .scene-indicator {
+      position: absolute;
+      top: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+      z-index: 50;
+    }
+
+    .si-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+    }
+
+    .si-dot:nth-child(1) { animation: siActive 20s linear 0.2s both; }
+    .si-dot:nth-child(2) { animation: siActive 20s linear 4.5s both; }
+    .si-dot:nth-child(3) { animation: siActive 20s linear 8.5s both; }
+    .si-dot:nth-child(4) { animation: siActive 20s linear 12.5s both; }
+    .si-dot:nth-child(5) { animation: siActive 20s linear 16.5s both; }
+
+    @keyframes siActive {
+      0%   { background: var(--teal-400); transform: scale(1.5); }
+      3%   { background: var(--teal-400); transform: scale(1.2); }
+      100% { background: rgba(255,255,255,0.2); }
+    }
+
+    /* ===== WATERMARK ===== */
+    .watermark {
+      position: absolute;
+      top: 40px;
+      right: 60px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.15);
+      font-weight: 500;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+
+    /* ===== GLOWING LINE DECORATION ===== */
+    .glow-line {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, var(--teal-400) 50%, transparent 100%);
+      opacity: 0.3;
+    }
+
+    .glow-line-top { top: 100px; }
+    .glow-line-bottom { bottom: 100px; }
+
+    /* ===== COUNTER ANIMATION ===== */
+    .counter-anim {
+      animation: countUp 2s ease 13.0s both;
+    }
+
+    @keyframes countUp {
+      0%   { content: "0"; }
+    }
+
+    /* RTL number display */
+    .ltr-num { direction: ltr; display: inline-block; }
+  </style>
+</head>
+<body>
+<div id="video-container">
+
+  <!-- Background -->
+  <div class="bg-gradient"></div>
+  <div class="bg-grid"></div>
+
+  <!-- Decorative lines -->
+  <div class="glow-line glow-line-top"></div>
+  <div class="glow-line glow-line-bottom"></div>
+
+  <!-- Watermark -->
+  <div class="watermark">المحل Pro</div>
+
+  <!-- Scene indicators -->
+  <div class="scene-indicator">
+    <div class="si-dot"></div>
+    <div class="si-dot"></div>
+    <div class="si-dot"></div>
+    <div class="si-dot"></div>
+    <div class="si-dot"></div>
+  </div>
+
+  <!-- Particles -->
+  <div class="particle" style="width:4px;height:4px;left:10%;animation-duration:12s;animation-delay:0s;"></div>
+  <div class="particle" style="width:3px;height:3px;left:20%;animation-duration:15s;animation-delay:2s;"></div>
+  <div class="particle" style="width:5px;height:5px;left:35%;animation-duration:10s;animation-delay:1s;"></div>
+  <div class="particle" style="width:2px;height:2px;left:50%;animation-duration:18s;animation-delay:3s;"></div>
+  <div class="particle" style="width:4px;height:4px;left:65%;animation-duration:14s;animation-delay:0.5s;"></div>
+  <div class="particle" style="width:3px;height:3px;left:80%;animation-duration:11s;animation-delay:4s;"></div>
+  <div class="particle" style="width:5px;height:5px;left:90%;animation-duration:16s;animation-delay:1.5s;"></div>
+  <div class="particle" style="width:2px;height:2px;left:25%;animation-duration:13s;animation-delay:5s;"></div>
+  <div class="particle" style="width:4px;height:4px;left:70%;animation-duration:9s;animation-delay:2.5s;"></div>
+
+  <!-- Flash transitions -->
+  <div class="scene-flash flash-1"></div>
+  <div class="scene-flash flash-2"></div>
+  <div class="scene-flash flash-3"></div>
+  <div class="scene-flash flash-4"></div>
+
+  <!-- ==============================
+       SCENE 1: HERO INTRO (0-4s)
+       ============================== -->
+  <div id="scene-1" class="scene">
+    <div class="hero-logo-wrap">
+      <div class="logo-circle">
+        <div class="logo-ring"></div>
+        <div class="logo-ring-2"></div>
+        <img class="logo-icon" src="/Users/omarmahmoud/.gemini/antigravity-ide/brain/f8c27132-dbb1-491f-b4e2-042bc914d08e/el_ma7al_logo_1779994644848.png" alt="المحل لوغو" />
+      </div>
+      <div class="hero-title">المحل</div>
+      <div class="hero-subtitle">الصيدلية البيطرية المتكاملة</div>
+      <div class="hero-tagline">نظام إدارة احترافي ✦ حديث ✦ متكامل</div>
+    </div>
+  </div>
+
+  <!-- ==============================
+       SCENE 2: PROBLEM (4-8s)
+       ============================== -->
+  <div id="scene-2" class="scene">
+    <div style="display:flex;flex-direction:column;align-items:center;gap:52px;">
+      <div class="problem-hook">
+        هل تُدير <em>مخزونك</em> على ورق؟<br/>هل تضيع فرص البيع بسبب <em>الفوضى</em>؟
+      </div>
+      <div class="chaos-cards">
+        <div class="chaos-card">
+          <span class="chaos-icon">📋</span>
+          <div class="chaos-title">سجلات يدوية</div>
+          <div class="chaos-desc">ضياع البيانات والأخطاء في الحسابات</div>
+        </div>
+        <div class="chaos-card">
+          <span class="chaos-icon">📦</span>
+          <div class="chaos-title">مخزون غير مُتتبَّع</div>
+          <div class="chaos-desc">نفاد الأصناف دون تنبيه مسبق</div>
+        </div>
+        <div class="chaos-card">
+          <span class="chaos-icon">📊</span>
+          <div class="chaos-title">لا تقارير فورية</div>
+          <div class="chaos-desc">قرارات مبنية على تخمين لا بيانات</div>
+        </div>
+      </div>
+      <div class="problem-stat">
+        <span class="stat-icon">⚡</span>
+        <span class="stat-text">المحل يحل كل هذا في مكان واحد</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==============================
+       SCENE 3: INVENTORY (8-12s)
+       ============================== -->
+  <div id="scene-3" class="scene">
+    <div style="flex:1;">
+      <div class="feature-label">✦ الميزة الأولى</div>
+      <div class="feature-title">إدارة <span>المخزون</span><br/>بذكاء فائق</div>
+      <div class="feature-desc">
+        تتبع كل صنف في الصيدلية بشكل لحظي. تنبيهات تلقائية قبل نفاد المخزون، وتاريخ حركة كامل لكل دواء.
+      </div>
+      <div class="feature-pills">
+        <div class="pill"><span class="pill-icon">🔔</span> تنبيهات تلقائية</div>
+        <div class="pill"><span class="pill-icon">📱</span> تحديث فوري</div>
+        <div class="pill"><span class="pill-icon">🔍</span> بحث سريع</div>
+        <div class="pill"><span class="pill-icon">📅</span> تواريخ الانتهاء</div>
+      </div>
+    </div>
+    <div class="dash-mockup">
+      <div class="dash-header">
+        <div class="dash-dot dash-dot-red"></div>
+        <div class="dash-dot dash-dot-yellow"></div>
+        <div class="dash-dot dash-dot-green"></div>
+        <div class="dash-title-bar">إدارة المخزون — الصيدلية البيطرية</div>
+      </div>
+      <div class="dash-body">
+        <div class="inv-table-header">
+          <div class="inv-th">اسم الصنف</div>
+          <div class="inv-th">الكمية</div>
+          <div class="inv-th">السعر</div>
+          <div class="inv-th">الحالة</div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-name">أموكسيلين 500 مج</div>
+          <div class="inv-qty ltr-num">248</div>
+          <div class="inv-price ltr-num">25.00 ج</div>
+          <div><span class="inv-badge badge-ok">متوفر</span></div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-name">فيتامين B12 حقن</div>
+          <div class="inv-qty ltr-num">18</div>
+          <div class="inv-price ltr-num">42.50 ج</div>
+          <div><span class="inv-badge badge-low">منخفض</span></div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-name">إيفيرمكتين 1%</div>
+          <div class="inv-qty ltr-num">95</div>
+          <div class="inv-price ltr-num">18.00 ج</div>
+          <div><span class="inv-badge badge-ok">متوفر</span></div>
+        </div>
+        <div class="inv-row">
+          <div class="inv-name">ديكساميثازون حقن</div>
+          <div class="inv-qty ltr-num">0</div>
+          <div class="inv-price ltr-num">35.00 ج</div>
+          <div><span class="inv-badge badge-out">نافد</span></div>
+        </div>
+        <div class="inv-alert">
+          <span>⚠️</span>
+          <span>٣ أصناف تحتاج إلى إعادة طلب — اضغط لعرض التفاصيل</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==============================
+       SCENE 4: SALES & REPORTS (12-16s)
+       ============================== -->
+  <div id="scene-4" class="scene">
+    <div class="sales-dash">
+      <div class="dash-header">
+        <div class="dash-dot dash-dot-red"></div>
+        <div class="dash-dot dash-dot-yellow"></div>
+        <div class="dash-dot dash-dot-green"></div>
+        <div class="dash-title-bar">لوحة المبيعات والتقارير</div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-card-label">إجمالي المبيعات اليوم</div>
+          <div class="stat-card-value teal ltr-num">4,280 ج</div>
+          <div class="stat-card-change">↑ 23% من أمس</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">الفواتير المُصدَرة</div>
+          <div class="stat-card-value gold ltr-num">37</div>
+          <div class="stat-card-change">↑ 8 فاتورة جديدة</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">العملاء النشطين</div>
+          <div class="stat-card-value green ltr-num">142</div>
+          <div class="stat-card-change">↑ 5 عملاء جدد</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">صافي الربح</div>
+          <div class="stat-card-value ltr-num">1,960 ج</div>
+          <div class="stat-card-change">↑ 31% هذا الشهر</div>
+        </div>
+      </div>
+      <div class="chart-area">
+        <div class="chart-title">المبيعات — آخر ٧ أيام</div>
+        <div class="chart-bars">
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">سبت</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">أحد</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">اثن</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">ثلا</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">أرب</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">خمس</div>
+          </div>
+          <div class="chart-bar-wrap">
+            <div class="chart-bar"></div>
+            <div class="chart-label">جمع</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="flex:1;">
+      <div class="feature-label">✦ الميزة الثانية</div>
+      <div class="feature-title">تقارير <span>المبيعات</span><br/>والعملاء لحظياً</div>
+      <div class="feature-desc">
+        كشوفات حساب مفصّلة، فواتير احترافية PDF، وتحليل أداء المبيعات لكل موسم ولكل عميل.
+      </div>
+      <div class="feature-pills">
+        <div class="pill"><span class="pill-icon">📄</span> فواتير PDF</div>
+        <div class="pill"><span class="pill-icon">📈</span> تحليل المبيعات</div>
+        <div class="pill"><span class="pill-icon">👥</span> كشف حساب</div>
+        <div class="pill"><span class="pill-icon">💰</span> إدارة الديون</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==============================
+       SCENE 5: CTA (16-20s)
+       ============================== -->
+  <div id="scene-5" class="scene">
+    <div class="cta-logo-wrap">
+      <div class="cta-logo-small">
+        <img class="cta-logo-img" src="/Users/omarmahmoud/.gemini/antigravity-ide/brain/f8c27132-dbb1-491f-b4e2-042bc914d08e/el_ma7al_logo_1779994644848.png" alt="المحل" />
+      </div>
+      <div class="cta-title">ابدأ اليوم مع المحل</div>
+    </div>
+    <div class="cta-sub">نظام إدارة الصيدلية البيطرية المتكامل</div>
+    <div class="cta-features-row">
+      <div class="cta-feature-chip"><span class="chip-icon">✅</span> مخزون ذكي</div>
+      <div class="cta-feature-chip"><span class="chip-icon">✅</span> مبيعات وفواتير</div>
+      <div class="cta-feature-chip"><span class="chip-icon">✅</span> إدارة العملاء</div>
+      <div class="cta-feature-chip"><span class="chip-icon">✅</span> تقارير فورية</div>
+    </div>
+    <div class="cta-url">🌐 elm7l.rf.gd</div>
+    <div class="cta-tagline">الصيدلية البيطرية الحديثة تبدأ من هنا</div>
+  </div>
+
+  <!-- Progress bar -->
+  <div class="progress-bar"></div>
+
+</div>
+</body>
+</html>
