@@ -8,12 +8,16 @@ import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
 import ClientSearchCombobox from '@/components/ClientSearchCombobox'
 import { Wallet, Building2 } from 'lucide-react'
+import { useAuthStore } from '@/stores/auth'
+import { canViewFinancials } from '@/lib/roles'
 
 export default function PaymentNew() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
+  const role = useAuthStore((s) => s.user?.role)
   const presetFromUrlAppliedRef = useRef(false)
+  const lastSelectedClientId = useRef('')
   const [clientId, setClientId] = useState('')
   const [barnId, setBarnId] = useState('')
   const [amount, setAmount] = useState<number>(0)
@@ -56,6 +60,7 @@ export default function PaymentNew() {
     
     presetFromUrlAppliedRef.current = true
     setClientId(cid)
+    lastSelectedClientId.current = cid
     setBarnId('')
     setSearchParams({}, { replace: true })
   }, [searchParams, clients, clientsData, setSearchParams])
@@ -119,6 +124,7 @@ export default function PaymentNew() {
 
   const handleClientChange = (id: string) => {
     setClientId(id)
+    lastSelectedClientId.current = id
     setBarnId('')
   }
 
@@ -131,7 +137,11 @@ export default function PaymentNew() {
         durationMs={1700}
         onComplete={() => {
           setPaymentSuccess(false)
-          navigate(paymentMethod === 'discount' ? '/discounts' : '/payments')
+          if (canViewFinancials(role)) {
+            navigate(paymentMethod === 'discount' ? '/discounts' : '/payments')
+          } else {
+            navigate(lastSelectedClientId.current ? `/clients/${lastSelectedClientId.current}` : '/dashboard')
+          }
         }}
       />
       <h1 className="text-2xl font-bold">

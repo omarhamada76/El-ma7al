@@ -16,7 +16,7 @@ import EditProductModal from '@/components/EditProductModal'
 import FeedbackBanner from '@/components/FeedbackBanner'
 import SuccessOverlay from '@/components/SuccessOverlay'
 import { useAuthStore } from '@/stores/auth'
-import { canManageProductBatches } from '@/lib/roles'
+import { canManageProductBatches, canViewFinancials } from '@/lib/roles'
 
 const LAST_WAREHOUSE_KEY = 'vet-pharmacy-inventory-warehouse'
 
@@ -35,6 +35,7 @@ function getLastWarehouseId(): string {
 
 export default function Inventory() {
   const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const canEditBatches = canManageProductBatches(role)
   const isSuperAdmin = role === 'super_admin'
   const [search, setSearch] = useState('')
@@ -605,14 +606,16 @@ export default function Inventory() {
                 <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
                   <th className="text-right py-3 px-4">المنتج</th>
                   <th className="text-right py-3 px-4 hidden sm:table-cell">الفئة</th>
-                  <th
-                    className={cn(
-                      'text-right py-3 px-4',
-                      editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
-                    )}
-                  >
-                    سعر الشراء
-                  </th>
+                  {showFinancials && (
+                    <th
+                      className={cn(
+                        'text-right py-3 px-4',
+                        editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                      )}
+                    >
+                      سعر الشراء
+                    </th>
+                  )}
                   <th className="text-right py-3 px-4">سعر البيع</th>
                   <th className="text-right py-3 px-4">المخزون</th>
                   <th className="text-right py-3 px-4"></th>
@@ -716,34 +719,36 @@ export default function Inventory() {
                       <td className="py-2 px-4 text-gray-500 dark:text-gray-400 hidden sm:table-cell">
                         {p.category ?? '—'}
                       </td>
-                      <td
-                        className={cn(
-                          'py-2 px-4 align-middle',
-                          editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
-                        )}
-                      >
-                        {editPriceId === p.id ? (
-                          <input
-                            type="number"
-                            min={0}
-                            step="any"
-                            value={editPurchasePriceVal}
-                            onChange={(e) => setEditPurchasePriceVal(e.target.value)}
-                            autoFocus
-                            placeholder="شراء"
-                            inputMode="decimal"
-                            className="h-9 w-full min-w-[4.5rem] max-w-[6.5rem] rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800"
-                          />
-                        ) : (hasBatchPP && (ppMin! > 0 || ppMax! > 0)) ? (
-                          ppIsSingle
-                            ? formatCurrency(ppMin!)
-                            : <span>{formatCurrency(ppMin!)} — {formatCurrency(ppMax!)}</span>
-                        ) : p.purchase_price > 0 ? (
-                          formatCurrency(p.purchase_price)
-                        ) : (
-                          <span className="text-gray-400">---</span>
-                        )}
-                      </td>
+                      {showFinancials && (
+                        <td
+                          className={cn(
+                            'py-2 px-4 align-middle',
+                            editPriceId != null ? 'table-cell' : 'hidden md:table-cell'
+                          )}
+                        >
+                          {editPriceId === p.id ? (
+                            <input
+                              type="number"
+                              min={0}
+                              step="any"
+                              value={editPurchasePriceVal}
+                              onChange={(e) => setEditPurchasePriceVal(e.target.value)}
+                              autoFocus
+                              placeholder="شراء"
+                              inputMode="decimal"
+                              className="h-9 w-full min-w-[4.5rem] max-w-[6.5rem] rounded-md border border-gray-300 bg-white px-2 text-sm box-border dark:border-gray-600 dark:bg-gray-800"
+                            />
+                          ) : (hasBatchPP && (ppMin! > 0 || ppMax! > 0)) ? (
+                            ppIsSingle
+                              ? formatCurrency(ppMin!)
+                              : <span>{formatCurrency(ppMin!)} — {formatCurrency(ppMax!)}</span>
+                          ) : p.purchase_price > 0 ? (
+                            formatCurrency(p.purchase_price)
+                          ) : (
+                            <span className="text-gray-400">---</span>
+                          )}
+                        </td>
+                      )}
                       <td className="py-2 px-4 align-middle">
                         {editPriceId === p.id ? (
                           <form
@@ -791,6 +796,8 @@ export default function Inventory() {
                               إلغاء
                             </button>
                           </form>
+                        ) : !showFinancials ? (
+                          <span className="text-gray-800 dark:text-gray-200">{sellingPriceCellContent}</span>
                         ) : batchRangePreventsInline ? (
                           <span className="text-gray-800 dark:text-gray-200">{sellingPriceCellContent}</span>
                         ) : (

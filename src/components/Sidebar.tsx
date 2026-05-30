@@ -50,8 +50,6 @@ const staffNavTos = new Set([
   '/transfer-history',
   '/invoices',
   '/returns/new',
-  '/payments',
-  '/discounts',
 ])
 
 interface SidebarProps {

@@ -132,9 +132,30 @@ function App() {
         <Route path="/invoices/:id" element={<InvoiceDetail />} />
         <Route path="/returns/new" element={<ReturnNew />} />
         <Route path="/payments/new" element={<PaymentNew />} />
-        <Route path="/payments/:id" element={<PaymentDetail />} />
-        <Route path="/payments" element={<Payments />} />
-        <Route path="/discounts" element={<Discounts />} />
+        <Route
+          path="/payments/:id"
+          element={
+            <FinanceOnlyRoute>
+              <PaymentDetail />
+            </FinanceOnlyRoute>
+          }
+        />
+        <Route
+          path="/payments"
+          element={
+            <FinanceOnlyRoute>
+              <Payments />
+            </FinanceOnlyRoute>
+          }
+        />
+        <Route
+          path="/discounts"
+          element={
+            <FinanceOnlyRoute>
+              <Discounts />
+            </FinanceOnlyRoute>
+          }
+        />
         <Route
           path="/reports"
           element={

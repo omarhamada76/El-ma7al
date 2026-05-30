@@ -7,6 +7,8 @@ import InitialProductBatchesEditor, {
   buildInitialBatchesPayload,
   findFirstDuplicateBatchPair,
 } from './InitialProductBatchesEditor'
+import { useAuthStore } from '@/stores/auth'
+import { canViewFinancials } from '@/lib/roles'
 
 const ADD_PRODUCT_WAREHOUSE_KEY = 'vet-pharmacy-add-product-warehouse'
 
@@ -102,6 +104,8 @@ export default function AddProductModal({
   onSubmit,
 }: AddProductModalProps) {
   const isEdit = !!initialValues
+  const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const [name, setName] = useState('')
   const [company, setCompany] = useState('')
   const [categorySelect, setCategorySelect] = useState('')
@@ -254,7 +258,8 @@ export default function AddProductModal({
       const built = buildInitialBatchesPayload(
         initialBatchRows,
         unit_type,
-        unit_type === 'bulk' ? kpb : null
+        unit_type === 'bulk' ? kpb : null,
+        showFinancials
       )
       if (!built.ok) {
         setError(built.error)
@@ -279,17 +284,17 @@ export default function AddProductModal({
     let effectivePurchase: number
     let effectiveSelling: number
     if (initialBatchesPayload.length > 0) {
-      effectivePurchase = initialBatchesPayload[0].purchase_price
+      effectivePurchase = showFinancials ? initialBatchesPayload[0].purchase_price : 0
       effectiveSelling = initialBatchesPayload[0].selling_price
     } else {
-      if (purchase_price === '' || selling_price === '') {
-        setError('أدخل سعر الشراء وسعر البيع')
+      if (selling_price === '' || (showFinancials && purchase_price === '')) {
+        setError(showFinancials ? 'أدخل سعر الشراء وسعر البيع' : 'أدخل سعر البيع')
         return
       }
-      effectivePurchase = Number(purchase_price)
+      effectivePurchase = showFinancials ? Number(purchase_price) : 0
       effectiveSelling = Number(selling_price)
-      if (!Number.isFinite(effectivePurchase) || !Number.isFinite(effectiveSelling)) {
-        setError('أدخل سعر الشراء وسعر البيع')
+      if (!Number.isFinite(effectiveSelling) || (showFinancials && !Number.isFinite(effectivePurchase))) {
+        setError(showFinancials ? 'أدخل سعر الشراء وسعر البيع' : 'أدخل سعر البيع')
         return
       }
     }
@@ -517,20 +522,22 @@ export default function AddProductModal({
             </p>
           )}
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={purchase_price === '' ? '' : purchase_price}
-              onChange={(e) =>
-                setPurchasePrice(e.target.value === '' ? '' : Number(e.target.value))
-              }
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-            />
-          </div>
+        <div className={showFinancials ? 'grid grid-cols-2 gap-3' : 'block'}>
+          {showFinancials && (
+            <div>
+              <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={purchase_price === '' ? '' : purchase_price}
+                onChange={(e) =>
+                  setPurchasePrice(e.target.value === '' ? '' : Number(e.target.value))
+                }
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium mb-1">سعر البيع (ج.م)</label>
             <input

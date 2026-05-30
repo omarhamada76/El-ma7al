@@ -1,6 +1,8 @@
 import { useCallback } from 'react'
 import type { InitialBatchEntry } from '@/api/products'
 import { fromMonthInputValue, toMonthInputValue } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth'
+import { canViewFinancials } from '@/lib/roles'
 
 export type InitialBatchUiRow = {
   key: string
@@ -37,11 +39,11 @@ export function newInitialBatchRow(
   }
 }
 
-/** Build API payload or validation error (Arabic). */
 export function buildInitialBatchesPayload(
   rows: InitialBatchUiRow[],
   unitType: 'piece' | 'bulk',
-  defaultBagWeightKg: number | null
+  defaultBagWeightKg: number | null,
+  showFinancials: boolean = true
 ): { ok: true; batches: InitialBatchEntry[] } | { ok: false; error: string } {
   const normExp = (s: string) => fromMonthInputValue(toMonthInputValue(s))
 
@@ -54,9 +56,9 @@ export function buildInitialBatchesPayload(
 
   for (const r of filled) {
     const wh = Number(r.warehouse_id)
-    const pp = r.purchase_price === '' ? NaN : Number(r.purchase_price)
+    const pp = showFinancials ? (r.purchase_price === '' ? NaN : Number(r.purchase_price)) : 0
     const sp = r.selling_price === '' ? NaN : Number(r.selling_price)
-    if (!Number.isFinite(pp) || pp < 0) {
+    if (showFinancials && (!Number.isFinite(pp) || pp < 0)) {
       return { ok: false, error: 'سعر الشراء مطلوب لكل دفعة' }
     }
     if (!Number.isFinite(sp) || sp < 0) {
@@ -166,6 +168,8 @@ export default function InitialProductBatchesEditor({
   title = 'دفعات المخزون الابتدائي',
   description = 'اختياري — دفعة لكل رصيد من مشتريات سابقة (صلاحية وسعر مختلفان). بدون دفعات يُنشأ المنتج برصيد صفر.',
 }: Props) {
+  const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const addRow = useCallback(() => {
     onRowsChange([
       ...rows,
@@ -249,21 +253,23 @@ export default function InitialProductBatchesEditor({
                     className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-medium mb-0.5">سعر الشراء *</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={r.purchase_price === '' ? '' : r.purchase_price}
-                    onChange={(e) =>
-                      updateRow(r.key, {
-                        purchase_price: e.target.value === '' ? '' : Number(e.target.value),
-                      })
-                    }
-                    className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
-                  />
-                </div>
+                {showFinancials && (
+                  <div>
+                    <label className="block text-xs font-medium mb-0.5">سعر الشراء *</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={r.purchase_price === '' ? '' : r.purchase_price}
+                      onChange={(e) =>
+                        updateRow(r.key, {
+                          purchase_price: e.target.value === '' ? '' : Number(e.target.value),
+                        })
+                      }
+                      className="w-full px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium mb-0.5">سعر البيع *</label>
                   <input

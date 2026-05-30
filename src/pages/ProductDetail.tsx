@@ -12,7 +12,7 @@ import type { Product, ProductBatch, BagInstance } from '@/types/api'
 import EditProductModal from '@/components/EditProductModal'
 import SetProductStockModal from '@/components/SetProductStockModal'
 import { useAuthStore } from '@/stores/auth'
-import { canManageProductBatches } from '@/lib/roles'
+import { canManageProductBatches, canViewFinancials } from '@/lib/roles'
 
 export default function ProductDetail() {
   const { id } = useParams<{ id: string }>()
@@ -30,6 +30,7 @@ export default function ProductDetail() {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const canEditBatches = canManageProductBatches(role)
   const isSuperAdmin = role === 'super_admin'
 
@@ -306,10 +307,12 @@ export default function ProductDetail() {
       </div>
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-          <p className="text-sm text-gray-500 dark:text-gray-400">سعر الشراء</p>
-          <p className="text-xl font-bold mt-1">{formatCurrency(product.purchase_price)}</p>
-        </div>
+        {showFinancials && (
+          <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            <p className="text-sm text-gray-500 dark:text-gray-400">سعر الشراء</p>
+            <p className="text-xl font-bold mt-1">{formatCurrency(product.purchase_price)}</p>
+          </div>
+        )}
         <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
           <p className="text-sm text-gray-500 dark:text-gray-400">سعر البيع</p>
           <p className="text-xl font-bold mt-1">{formatCurrency(product.selling_price)}</p>
@@ -495,7 +498,7 @@ export default function ProductDetail() {
                   <th className="text-right py-2 px-3">
                     {product?.unit_type === 'bulk' ? 'الوزن' : 'الكمية'}
                   </th>
-                  <th className="text-right py-2 px-3">سعر الشراء</th>
+                  {showFinancials && <th className="text-right py-2 px-3">سعر الشراء</th>}
                   <th className="text-right py-2 px-3">سعر البيع</th>
                   <th className="py-2 px-3 w-28" />
                 </tr>
@@ -539,15 +542,17 @@ export default function ProductDetail() {
                         )}
                       </td>
                       <td className="py-2 px-3 font-medium">{formatNumber(b.quantity, 2)}</td>
-                      <td className="py-2 px-3 text-gray-600 dark:text-gray-400">
-                        {b.purchase_price != null && b.purchase_price > 0 ? (
-                          formatCurrency(b.purchase_price)
-                        ) : (
-                          <span className="text-gray-400 italic text-xs" title="سعر الشراء الافتراضي للمنتج">
-                            {formatCurrency(product.purchase_price)} (افتراضي)
-                          </span>
-                        )}
-                      </td>
+                      {showFinancials && (
+                        <td className="py-2 px-3 text-gray-600 dark:text-gray-400">
+                          {b.purchase_price != null && b.purchase_price > 0 ? (
+                            formatCurrency(b.purchase_price)
+                          ) : (
+                            <span className="text-gray-400 italic text-xs" title="سعر الشراء الافتراضي للمنتج">
+                              {formatCurrency(product.purchase_price)} (افتراضي)
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td className="py-2 px-3">
                         {b.selling_price != null && b.selling_price > 0 ? (
                           formatCurrency(b.selling_price)
@@ -601,10 +606,12 @@ export default function ProductDetail() {
                   {formatExpiryMonth(printBatch.expiry_date)}
                 </p>
               </div>
-              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
-                <p className="text-gray-500 dark:text-gray-400 text-xs">سعر الشراء</p>
-                <p className="font-medium">{printBatch.purchase_price != null ? formatCurrency(printBatch.purchase_price) : '—'}</p>
-              </div>
+              {showFinancials && (
+                <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
+                  <p className="text-gray-500 dark:text-gray-400 text-xs">سعر الشراء</p>
+                  <p className="font-medium">{printBatch.purchase_price != null ? formatCurrency(printBatch.purchase_price) : '—'}</p>
+                </div>
+              )}
               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-700/50">
                 <p className="text-gray-500 dark:text-gray-400 text-xs">سعر البيع</p>
                 <p className="font-medium">{printBatch.selling_price != null ? formatCurrency(printBatch.selling_price) : '—'}</p>

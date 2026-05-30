@@ -4,6 +4,8 @@ import { Trash2 } from 'lucide-react'
 import Modal from './Modal'
 import ProductImageField from './ProductImageField'
 import type { Product, ProductBatch } from '@/types/api'
+import { useAuthStore } from '@/stores/auth'
+import { canViewFinancials } from '@/lib/roles'
 import type { WarehouseOption } from './AddProductModal'
 import InitialProductBatchesEditor, {
   type InitialBatchUiRow,
@@ -57,6 +59,8 @@ export default function EditProductModal({
   onProductSaved,
 }: EditProductModalProps) {
   const queryClient = useQueryClient()
+  const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const productId = product.id
   const productIdKey = String(productId)
 
@@ -191,7 +195,8 @@ export default function EditProductModal({
       const built = buildInitialBatchesPayload(
         initialBatchRows,
         unit_type,
-        unit_type === 'bulk' ? kpb : null
+        unit_type === 'bulk' ? kpb : null,
+        showFinancials
       )
       if (!built.ok) {
         setProductError(built.error)
@@ -419,21 +424,23 @@ export default function EditProductModal({
           )}
 
           {showDefaultPricesInMain && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium mb-1" title={defaultPriceHint}>
-                  {defaultPurchaseLabel}
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={purchase_price || ''}
-                  onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-                />
-                <p className="text-xs text-gray-500 mt-1">{defaultPriceHint}</p>
-              </div>
+            <div className={showFinancials ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "block"}>
+              {showFinancials && (
+                <div>
+                  <label className="block text-sm font-medium mb-1" title={defaultPriceHint}>
+                    {defaultPurchaseLabel}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={purchase_price || ''}
+                    onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">{defaultPriceHint}</p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium mb-1" title={defaultPriceHint}>
                   {defaultSellingLabel}
@@ -452,18 +459,20 @@ export default function EditProductModal({
           )}
 
           {noBatchesYet && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={purchase_price || ''}
-                  onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-                />
-              </div>
+            <div className={showFinancials ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "block"}>
+              {showFinancials && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">سعر الشراء (ج.م)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={purchase_price || ''}
+                    onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
+                    className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium mb-1">سعر البيع (ج.م)</label>
                 <input
@@ -507,18 +516,20 @@ export default function EditProductModal({
                   <p className="text-xs text-gray-500">
                     تُستخدم عند إنشاء دفعة يدوية جديدة وليست بديلاً عن أسعار الدُفعات الحالية.
                   </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">{defaultPurchaseLabel}</label>
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={purchase_price || ''}
-                        onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-                      />
-                    </div>
+                  <div className={showFinancials ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : "block"}>
+                    {showFinancials && (
+                      <div>
+                        <label className="block text-sm font-medium mb-1">{defaultPurchaseLabel}</label>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          value={purchase_price || ''}
+                          onChange={(e) => setPurchasePrice(Number(e.target.value) || 0)}
+                          className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                        />
+                      </div>
+                    )}
                     <div>
                       <label className="block text-sm font-medium mb-1">{defaultSellingLabel}</label>
                       <input
@@ -602,6 +613,8 @@ function BatchesSection({
   productIdKey: string
 }) {
   const queryClient = useQueryClient()
+  const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const [showAdd, setShowAdd] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const isBulk = product.unit_type === 'bulk'
@@ -701,13 +714,13 @@ function BatchesSection({
                 <th className="text-right py-2 px-2">عدد الشكاير</th>
                 <th className="text-right py-2 px-2">وزن الشكارة</th>
                 <th className="text-right py-2 px-2">كيلو متبقي</th>
-                <th className="text-right py-2 px-2">شراء/كيلو</th>
+                {showFinancials && <th className="text-right py-2 px-2">شراء/كيلو</th>}
                 <th className="text-right py-2 px-2">بيع/كيلو</th>
               </>
             ) : (
               <>
                 <th className="text-right py-2 px-2">الكمية</th>
-                <th className="text-right py-2 px-2">سعر الشراء</th>
+                {showFinancials && <th className="text-right py-2 px-2">سعر الشراء</th>}
                 <th className="text-right py-2 px-2">سعر البيع</th>
               </>
             )}
@@ -789,6 +802,8 @@ function BatchRow({
   isSuperAdmin: boolean
   onSaved: () => void
 }) {
+  const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const effectivePurchasePrice =
     batch.purchase_price != null && Number(batch.purchase_price) > 0
@@ -983,23 +998,25 @@ function BatchRow({
               batch.kg_remaining != null ? formatNumber(batch.kg_remaining, 2) : '—'
             )}
           </td>
-          <td className="py-2 px-2 align-top">
-            {canManage ? (
-              <input
-                type="number"
-                min={0}
-                step={0.01}
-                value={pp}
-                onChange={(e) => setPp(e.target.value)}
-                onBlur={() => {
-                  if (!saving && hasDirtyChanges) void handleSave()
-                }}
-                className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            ) : (
-              effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
-            )}
-          </td>
+          {showFinancials && (
+            <td className="py-2 px-2 align-top">
+              {canManage ? (
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={pp}
+                  onChange={(e) => setPp(e.target.value)}
+                  onBlur={() => {
+                    if (!saving && hasDirtyChanges) void handleSave()
+                  }}
+                  className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                />
+              ) : (
+                effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
+              )}
+            </td>
+          )}
           <td className="py-2 px-2 align-top">
             {canManage ? (
               <input
@@ -1047,23 +1064,25 @@ function BatchRow({
               </>
             )}
           </td>
-          <td className="py-2 px-2 align-top">
-            {canManage ? (
-              <input
-                type="number"
-                min={0}
-                step={0.01}
-                value={pp}
-                onChange={(e) => setPp(e.target.value)}
-                onBlur={() => {
-                  if (!saving && hasDirtyChanges) void handleSave()
-                }}
-                className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
-              />
-            ) : (
-              effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
-            )}
-          </td>
+          {showFinancials && (
+            <td className="py-2 px-2 align-top">
+              {canManage ? (
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={pp}
+                  onChange={(e) => setPp(e.target.value)}
+                  onBlur={() => {
+                    if (!saving && hasDirtyChanges) void handleSave()
+                  }}
+                  className="w-24 px-1 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                />
+              ) : (
+                effectivePurchasePrice > 0 ? formatCurrency(effectivePurchasePrice) : '—'
+              )}
+            </td>
+          )}
           <td className="py-2 px-2 align-top">
             {canManage ? (
               <input
