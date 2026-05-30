@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams, useMatch, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X, CheckCircle2, Users, Wallet, Zap, Banknote, CreditCard, Loader2 } from 'lucide-react'
+import { Plus, Trash2, Search, UserPlus, Package, GripVertical, X, CheckCircle2, Users, Wallet, Zap, Banknote, CreditCard, Loader2, Camera } from 'lucide-react'
+import BarcodeScannerModal from '@/components/BarcodeScannerModal'
 import { playScanFeedback } from '@/lib/scanFeedback'
 import { getClients, getClientBarns, createClient } from '@/api/clients'
 import type { Client } from '@/types/api'
@@ -152,6 +153,7 @@ export default function InvoiceNew() {
   const [notice, setNotice] = useState('')
   const [barcodeInput, setBarcodeInput] = useState('')
   const [scanError, setScanError] = useState('')
+  const [scannerOpen, setScannerOpen] = useState(false)
   const [clientSearch, setClientSearch] = useState('')
   const [clientListOpen, setClientListOpen] = useState(false)
   const [addClientOpen, setAddClientOpen] = useState(false)
@@ -1235,6 +1237,29 @@ export default function InvoiceNew() {
     barcodeInputRef.current?.focus()
   }
 
+  const handleScannerScan = async (barcode: string) => {
+    const trimmed = barcode.trim()
+    if (!trimmed) return
+    setScannerOpen(false)
+    setScanError('')
+    
+    if (scanInFlightRef.current) return
+    scanInFlightRef.current = true
+    let ok = false
+    try {
+      ok = await runInvoiceScanRef.current(trimmed)
+    } finally {
+      scanInFlightRef.current = false
+    }
+    if (ok) {
+      playScanFeedback(true)
+    } else {
+      playScanFeedback(false)
+    }
+    setTimeout(() => itemsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 0)
+    barcodeInputRef.current?.focus()
+  }
+
   // --- Drag-and-drop reorder ---
   const handleDragStart = useCallback((index: number) => {
     dragItemRef.current = index
@@ -1914,8 +1939,16 @@ export default function InvoiceNew() {
                     'border-gray-200 dark:border-gray-800 focus:bg-white dark:focus:bg-gray-900 focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 outline-none'
                   )}
                 />
-                <div className="absolute start-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                   <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-[10px] font-mono border border-gray-200 dark:border-gray-600">Enter ↵</kbd>
+                <div className="absolute start-3 top-1/2 -translate-y-1/2 flex items-center gap-2 z-20">
+                  <button
+                    type="button"
+                    onClick={() => setScannerOpen(true)}
+                    className="p-1 rounded-lg text-gray-500 hover:text-primary-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors shrink-0"
+                    title="مسح بالكاميرا"
+                  >
+                    <Camera className="w-5 h-5" />
+                  </button>
+                  <kbd className="hidden sm:inline-flex px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-[10px] font-mono border border-gray-200 dark:border-gray-600">Enter ↵</kbd>
                 </div>
               </div>
               {scanError && (
@@ -2637,6 +2670,11 @@ export default function InvoiceNew() {
           }
           setInvoiceSuccess(null)
         }}
+      />
+      <BarcodeScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScanSuccess={handleScannerScan}
       />
     </div>
   )

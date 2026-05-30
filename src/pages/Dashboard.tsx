@@ -14,6 +14,7 @@ import {
   ChevronUp,
   ChevronDown,
   ArrowUpRight,
+  Camera,
 } from 'lucide-react'
 import { getRecentInvoices } from '@/api/dashboard'
 import { getClients } from '@/api/clients'
@@ -25,6 +26,7 @@ import { useAuthStore } from '@/stores/auth'
 import { canViewFinancials } from '@/lib/roles'
 import { normalizeInvoiceScanToken, setInvoiceNewPendingBarcode } from '@/lib/barcodeLookup'
 import { playScanFeedback } from '@/lib/scanFeedback'
+import BarcodeScannerModal from '@/components/BarcodeScannerModal'
 
 type QuickActionBase = {
   key: string
@@ -119,6 +121,7 @@ export default function Dashboard() {
   const [invoicesWindowMode, setInvoicesWindowMode] = useState<InvoicesWindowMode>('minimized')
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
+  const [scannerOpen, setScannerOpen] = useState(false)
 
   const { data: searchResults, isLoading: searchLoading } = useQuery({
     queryKey: ['products', 'search', searchQuery],
@@ -126,6 +129,16 @@ export default function Dashboard() {
     enabled: searchQuery.trim().length >= 2,
   })
   const productsList = searchResults?.data ?? []
+
+  const handleScannerScan = (barcode: string) => {
+    const trimmed = normalizeInvoiceScanToken(barcode)
+    if (trimmed) {
+      playScanFeedback(true)
+      setInvoiceNewPendingBarcode(trimmed)
+      setScannerOpen(false)
+      navigate(`/invoices/new?barcode=${encodeURIComponent(trimmed)}`)
+    }
+  }
 
   const { data: recentInvoices = [], isLoading: invoicesLoading } = useQuery({
     queryKey: ['invoices', 'recent'],
@@ -378,7 +391,7 @@ export default function Dashboard() {
               البحث السريع أو مسح الباركود
             </p>
             {/* Scanner field with laser sweep animation */}
-            <div className="relative overflow-hidden rounded-xl border-2 border-dashed border-red-400/40 dark:border-red-500/30 bg-gradient-to-b from-red-50/30 to-transparent dark:from-red-950/10">
+            <div className="relative overflow-hidden rounded-xl border-2 border-dashed border-red-400/40 dark:border-red-500/30 bg-gradient-to-b from-red-50/30 to-transparent dark:from-red-950/10 flex items-center">
               <div className="animate-laser" aria-hidden="true" />
               <input
                 type="text"
@@ -397,11 +410,19 @@ export default function Dashboard() {
                   }
                 }}
                 placeholder="ابحث بالاسم، الباركود أو رقم الدفعة..."
-                className="relative z-10 w-full bg-transparent px-4 py-3.5 text-sm text-center placeholder:text-gray-400/70 focus:outline-none focus:ring-0 border-0"
+                className="relative z-10 flex-1 bg-transparent px-4 py-3.5 text-sm text-center placeholder:text-gray-400/70 focus:outline-none focus:ring-0 border-0"
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
               />
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                className="relative z-20 p-3 ml-2 rounded-lg text-red-500 hover:bg-red-100/50 dark:hover:bg-red-950/30 transition-colors shrink-0"
+                title="مسح بالكاميرا"
+              >
+                <Camera className="w-5 h-5" />
+              </button>
             </div>
             {/* Search Results Dropdown */}
             {isSearchFocused && searchQuery.trim().length >= 2 && (
@@ -612,6 +633,11 @@ export default function Dashboard() {
           </div>,
           document.body
         )}
+      <BarcodeScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScanSuccess={handleScannerScan}
+      />
     </div>
   )
 }
