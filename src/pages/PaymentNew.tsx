@@ -16,6 +16,7 @@ export default function PaymentNew() {
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const role = useAuthStore((s) => s.user?.role)
+  const showFinancials = canViewFinancials(role)
   const presetFromUrlAppliedRef = useRef(false)
   const lastSelectedClientId = useRef('')
   const [clientId, setClientId] = useState('')
@@ -206,56 +207,58 @@ export default function PaymentNew() {
             clients={clients}
             value={clientId}
             onChange={handleClientChange}
-            showBalance
+            showBalance={showFinancials}
           />
         </div>
 
         {/* Live balance card — appears after selecting a client */}
         {clientId && (
           <div className="rounded-2xl border border-gray-200/60 dark:border-gray-700/60 bg-white/70 dark:bg-gray-800/70 backdrop-blur-sm overflow-hidden animate-modal-in">
-            {balanceLoading ? (
-              <div className="p-4 flex gap-3">
-                <div className="h-10 w-10 rounded-xl bg-gray-100 dark:bg-gray-700 animate-pulse" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-3 w-24 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
-                  <div className="h-5 w-32 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+            {showFinancials && (
+              balanceLoading ? (
+                <div className="p-4 flex gap-3">
+                  <div className="h-10 w-10 rounded-xl bg-gray-100 dark:bg-gray-700 animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 w-24 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                    <div className="h-5 w-32 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                  </div>
                 </div>
-              </div>
-            ) : liveBalance ? (
-              <div className="grid grid-cols-3 divide-x divide-x-reverse divide-gray-100 dark:divide-gray-700">
-                <div className="p-3 text-center">
-                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
-                    <Wallet className="w-3 h-3" /> الرصيد
-                  </p>
-                  <p className={cn(
-                    'text-sm font-black tabular-nums',
-                    liveBalance.balance <= 0 ? 'text-emerald-600 dark:text-emerald-400' :
-                    liveBalance.balance >= 5000 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'
-                  )}>
-                    {formatCurrency(liveBalance.balance)}
-                  </p>
+              ) : liveBalance ? (
+                <div className="grid grid-cols-3 divide-x divide-x-reverse divide-gray-100 dark:divide-gray-700">
+                  <div className="p-3 text-center">
+                    <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                      <Wallet className="w-3 h-3" /> الرصيد
+                    </p>
+                    <p className={cn(
+                      'text-sm font-black tabular-nums',
+                      liveBalance.balance <= 0 ? 'text-emerald-600 dark:text-emerald-400' :
+                      liveBalance.balance >= 5000 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'
+                    )}>
+                      {formatCurrency(liveBalance.balance)}
+                    </p>
+                  </div>
+                  <div className="p-3 text-center">
+                    <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                      إجمالي الحساب
+                    </p>
+                    <p className="text-sm font-bold tabular-nums text-gray-700 dark:text-gray-300">
+                      {formatCurrency(liveBalance.total_account)}
+                    </p>
+                  </div>
+                  <div className="p-3 text-center">
+                    <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
+                      إجمالي السداد
+                    </p>
+                    <p className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {formatCurrency(liveBalance.total_paid)}
+                    </p>
+                  </div>
                 </div>
-                <div className="p-3 text-center">
-                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
-                    إجمالي الحساب
-                  </p>
-                  <p className="text-sm font-bold tabular-nums text-gray-700 dark:text-gray-300">
-                    {formatCurrency(liveBalance.total_account)}
-                  </p>
-                </div>
-                <div className="p-3 text-center">
-                  <p className="text-[10px] text-gray-400 uppercase font-bold mb-1 flex items-center justify-center gap-1">
-                    إجمالي السداد
-                  </p>
-                  <p className="text-sm font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
-                    {formatCurrency(liveBalance.total_paid)}
-                  </p>
-                </div>
-              </div>
-            ) : null}
+              ) : null
+            )}
             {/* Barn quick-picker */}
             {barns.length > 0 && (
-              <div className="border-t border-gray-100 dark:border-gray-700 p-3">
+              <div className={cn("p-3", showFinancials && "border-t border-gray-100 dark:border-gray-700")}>
                 <p className="text-[10px] font-bold text-gray-400 uppercase mb-2 flex items-center gap-1">
                   <Building2 className="w-3 h-3" /> اختر العنبر (اختياري)
                 </p>
@@ -291,7 +294,7 @@ export default function PaymentNew() {
               </div>
             )}
             {clientId && barns.length === 0 && (
-              <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-2">
+              <div className={cn("px-4 py-2", showFinancials && "border-t border-gray-100 dark:border-gray-700")}>
                 <p className="text-xs text-gray-400">
                   لا توجد عنابر مسجلة لهذا العميل — سيتم تسجيل الحركة على الحساب العام.
                 </p>
